@@ -1,0 +1,14 @@
+[Unit]
+Description=pyflows media transcoder
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pyflows
+ExecStart=/opt/pyflows/bin/pyflows run --config /etc/pyflows/config.yaml
+Restart=on-failure
+RestartSec=30
+EnvironmentFile=-/etc/pyflows/env
+
+[Install]
+WantedBy=multi-user.target
