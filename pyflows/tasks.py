@@ -18,7 +18,7 @@ from pyflows.config import PyflowsConfig, LibraryConfig
 from pyflows.db import FileDB, FileStatus, compute_file_hash
 from pyflows.logging_utils import log_event
 from pyflows.notify import Notifier
-from pyflows.pipeline import encode_file
+from pyflows.pipeline import EncodeStatus, encode_file
 from pyflows.scanner import _probe_codec, scan_library
 from pyflows.webhook import start_webhook_server
 
@@ -226,7 +226,7 @@ def _do_encode(file_path: str, profile_name: str) -> None:
         db.update_status(file_path, FileStatus.PROCESSING)
 
         try:
-            success, error, final_path = encode_file(
+            result = encode_file(
                 input_path=file_path,
                 profile=profile,
                 temp_dir=config.general.temp_dir,
@@ -249,30 +249,31 @@ def _do_encode(file_path: str, profile_name: str) -> None:
             )
             return
 
-        if error == "skipped":
+        if result.status == EncodeStatus.SKIPPED:
             db.update_status(file_path, FileStatus.SKIPPED)
             log_event(log, logging.INFO, "encode_skipped", "Skipped file", file_path=file_path, profile=profile_name)
-        elif success:
-            if final_path != file_path:
-                db.rename_path(file_path, final_path)
-            output_size = Path(final_path).stat().st_size
-            new_hash = compute_file_hash(final_path)
-            db.update_hash(final_path, new_hash, output_size)
-            db.update_status(final_path, FileStatus.COMPLETED,
+        elif result.status == EncodeStatus.COMPLETED:
+            if result.final_path != file_path:
+                db.rename_path(file_path, result.final_path)
+            output_size = Path(result.final_path).stat().st_size
+            new_hash = compute_file_hash(result.final_path)
+            db.update_hash(result.final_path, new_hash, output_size)
+            db.update_status(result.final_path, FileStatus.COMPLETED,
                              output_codec=profile.video.codec, output_size=output_size)
             log_event(
                 log,
                 logging.INFO,
                 "encode_completed",
                 "Completed file encode",
-                file_path=final_path,
+                file_path=result.final_path,
                 profile=profile_name,
                 output_codec=profile.video.codec,
                 output_size=output_size,
             )
-            arr_source, arr_id = db.get_arr_metadata(final_path)
-            notifier.on_success(final_path, arr_source=arr_source, arr_id=arr_id)
+            arr_source, arr_id = db.get_arr_metadata(result.final_path)
+            notifier.on_success(result.final_path, arr_source=arr_source, arr_id=arr_id)
         else:
+            error = result.error
             retry_count, _ = db.get_retry_info(file_path)
             next_retry_count = retry_count + 1
             if _is_transient_error(error) and retry_count < config.general.max_retries:
