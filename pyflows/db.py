@@ -17,6 +17,15 @@ class FileStatus(enum.StrEnum):
     SKIPPED = "skipped"
 
 
+VALID_TRANSITIONS: dict[FileStatus, set[FileStatus]] = {
+    FileStatus.PENDING: {FileStatus.PROCESSING, FileStatus.COMPLETED, FileStatus.FAILED, FileStatus.SKIPPED},
+    FileStatus.PROCESSING: {FileStatus.COMPLETED, FileStatus.FAILED, FileStatus.SKIPPED, FileStatus.PENDING},
+    FileStatus.COMPLETED: {FileStatus.PENDING},
+    FileStatus.FAILED: {FileStatus.PENDING},
+    FileStatus.SKIPPED: {FileStatus.PENDING},
+}
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY,
@@ -44,6 +53,7 @@ CREATE TABLE IF NOT EXISTS files (
 );
 CREATE INDEX IF NOT EXISTS idx_files_hash ON files(file_hash);
 CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
+CREATE INDEX IF NOT EXISTS idx_files_library_status ON files(library, status);
 CREATE TABLE IF NOT EXISTS library_scans (
     library TEXT PRIMARY KEY,
     last_scan_at TEXT NOT NULL
@@ -64,6 +74,10 @@ class FileDB:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=-32000")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute("PRAGMA mmap_size=134217728")
             conn.executescript(SCHEMA)
             self.conn = conn
             self._migrate_schema()
@@ -132,14 +146,14 @@ class FileDB:
         row: sqlite3.Row | None = cur.fetchone()
         return row
 
-    def get_by_status(self, status: str, limit: int = 100) -> list[sqlite3.Row]:
+    def get_by_status(self, status: FileStatus, limit: int = 100) -> list[sqlite3.Row]:
         cur = self.conn.execute(
             "SELECT * FROM files WHERE status=? ORDER BY created_at LIMIT ?",
             (status, limit),
         )
         return cur.fetchall()
 
-    def count_by_status(self, status: str) -> int:
+    def count_by_status(self, status: FileStatus) -> int:
         cur = self.conn.execute("SELECT count(*) FROM files WHERE status=?", (status,))
         return cur.fetchone()[0]
 
@@ -186,9 +200,16 @@ class FileDB:
         cur = self.conn.execute(query, params)
         return cur.fetchone()
 
-    def update_status(self, path: str, status: str, error: str = "",
+    def update_status(self, path: str, status: FileStatus, error: str = "",
                       output_codec: str = "", output_size: int = 0) -> None:
         now = datetime.now(timezone.utc).isoformat()
+        current = self.get(path)
+        if current is not None:
+            current_status = FileStatus(current["status"])
+            if status not in VALID_TRANSITIONS.get(current_status, set()):
+                raise ValueError(
+                    f"Invalid status transition: {current_status} -> {status} for {path}"
+                )
         if status == FileStatus.PROCESSING:
             self.conn.execute("UPDATE files SET status=?, started_at=?, next_retry_at=NULL WHERE path=?",
                               (status, now, path))
@@ -261,6 +282,26 @@ class FileDB:
         cur = self.conn.execute(
             "UPDATE files SET status=?, started_at=NULL WHERE status=?",
             (FileStatus.PENDING, FileStatus.PROCESSING),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def retry_failed(self, path: str) -> bool:
+        """Reset a specific failed file to pending for re-processing."""
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, error=NULL, retry_count=0, next_retry_at=NULL, "
+            "started_at=NULL, completed_at=NULL WHERE path=? AND status=?",
+            (FileStatus.PENDING, path, FileStatus.FAILED),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def retry_all_failed(self) -> int:
+        """Reset all failed files to pending for re-processing."""
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, error=NULL, retry_count=0, next_retry_at=NULL, "
+            "started_at=NULL, completed_at=NULL WHERE status=?",
+            (FileStatus.PENDING, FileStatus.FAILED),
         )
         self.conn.commit()
         return cur.rowcount
