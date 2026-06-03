@@ -72,7 +72,8 @@ class FileDB:
             raise
 
     def upsert(self, path: str, library: str, profile: str,
-               file_hash: str, size: int, video_codec: str = "") -> bool:
+               file_hash: str, size: int, video_codec: str = "",
+               failed_retry_hours: int = 24) -> bool:
         """Insert or update a file record. Returns True if the file needs processing."""
         existing = self.get(path)
         now_dt = datetime.now(timezone.utc)
@@ -88,6 +89,20 @@ class FileDB:
             return True
 
         if existing["file_hash"] == file_hash and existing["status"] in (FileStatus.COMPLETED, FileStatus.SKIPPED):
+            return False
+
+        if existing["file_hash"] == file_hash and existing["status"] == FileStatus.FAILED:
+            completed_at = existing["completed_at"]
+            if completed_at:
+                failed_age = now_dt - datetime.fromisoformat(completed_at)
+                if failed_age >= timedelta(hours=failed_retry_hours):
+                    self.conn.execute(
+                        "UPDATE files SET status=?, error=NULL, retry_count=0, next_retry_at=NULL, "
+                        "started_at=NULL, completed_at=NULL WHERE path=?",
+                        (FileStatus.PENDING, path),
+                    )
+                    self.conn.commit()
+                    return True
             return False
 
         hold_until = existing["hold_until"]
@@ -316,8 +331,11 @@ class FileDB:
                 ),
             )
         else:
+            if existing["status"] == FileStatus.PROCESSING:
+                return
             self.conn.execute(
-                "UPDATE files SET library=?, profile=?, size=?, hold_until=?, last_seen_at=?, last_observed_size=?, last_observed_mtime=? WHERE path=?",
+                "UPDATE files SET library=?, profile=?, size=?, hold_until=?, last_seen_at=?, last_observed_size=?, last_observed_mtime=? "
+                "WHERE path=? AND status != ?",
                 (
                     library,
                     profile,
@@ -327,6 +345,7 @@ class FileDB:
                     size,
                     observed_mtime.isoformat(),
                     path,
+                    FileStatus.PROCESSING,
                 ),
             )
         self.conn.commit()

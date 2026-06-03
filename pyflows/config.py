@@ -34,7 +34,7 @@ DaemonMode = Literal["daemon", "webhook"]
 class GeneralConfig(BaseModel):
     mode: DaemonMode = "daemon"
     temp_dir: str
-    log_level: str = "info"
+    log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
     log_output: str = "stdout"
     log_format: str = "text"
     workers: int = 1
@@ -49,6 +49,7 @@ class GeneralConfig(BaseModel):
     max_retries: int = 3
     retry_backoff_seconds: int = 300
     stall_timeout: int = 300  # Kill ffmpeg if no progress for this many seconds
+    failed_retry_hours: int = 24
     metrics_port: int = 9327
 
 
