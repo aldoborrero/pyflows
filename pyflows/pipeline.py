@@ -11,7 +11,7 @@ from pyflows.audio import AudioAction, build_audio_plan
 from pyflows.config import HardwareConfig, ProfileConfig
 from pyflows.ffmpeg import FFmpegCommand
 from pyflows.logging_utils import log_event
-from pyflows.plan import FilePlan, container_suffix, plan_file, plan_from_probe, select_default_audio_pos, select_default_subtitle_pos
+from pyflows.plan import CHANNEL_NAMES, LANGUAGE_NAMES, FilePlan, container_suffix, plan_file, plan_from_probe, select_default_audio_pos, select_default_subtitle_pos
 from pyflows.probe import ProbeResult, StreamInfo, probe_file
 from pyflows.subtitles import filter_subtitles
 
@@ -20,15 +20,6 @@ log = logging.getLogger(__name__)
 # Codec to encoder mapping
 VAAPI_ENCODERS = {"hevc": "hevc_vaapi", "av1": "av1_vaapi"}
 CPU_ENCODERS = {"hevc": "libx265", "av1": "libsvtav1"}
-
-# Language code to display name
-LANGUAGE_NAMES = {
-    "eng": "English", "spa": "Spanish", "jpn": "Japanese", "fre": "French",
-    "ger": "German", "ita": "Italian", "por": "Portuguese", "chi": "Chinese",
-    "kor": "Korean", "ara": "Arabic", "rus": "Russian", "dut": "Dutch",
-}
-
-CHANNEL_NAMES = {1: "Mono", 2: "Stereo", 6: "5.1", 8: "7.1"}
 
 
 class TrackTitle:

@@ -21,7 +21,7 @@ ReasonCode = Literal[
     "no_video_stream",
 ]
 
-_LANGUAGE_NAMES = {
+LANGUAGE_NAMES = {
     "eng": "English",
     "spa": "Spanish",
     "jpn": "Japanese",
@@ -36,7 +36,7 @@ _LANGUAGE_NAMES = {
     "dut": "Dutch",
 }
 
-_CHANNEL_NAMES = {1: "Mono", 2: "Stereo", 6: "5.1", 8: "7.1"}
+CHANNEL_NAMES = {1: "Mono", 2: "Stereo", 6: "5.1", 8: "7.1"}
 
 
 @dataclass
@@ -131,8 +131,8 @@ def select_default_subtitle_pos(subtitles: list[StreamInfo], default_language: s
 
 
 def _track_title(language: str, codec: str, channels: int) -> str:
-    lang = _LANGUAGE_NAMES.get(language, language.upper())
-    ch = _CHANNEL_NAMES.get(channels, f"{channels}ch")
+    lang = LANGUAGE_NAMES.get(language, language.upper())
+    ch = CHANNEL_NAMES.get(channels, f"{channels}ch")
     return f"{lang} / {codec.upper()} / {ch}"
 
 
@@ -186,6 +186,7 @@ def plan_from_probe(input_path: str, probe: ProbeResult, profile: ProfileConfig)
         )
 
     audio_items: list[AudioTrackPlan] = []
+    audio_by_index = {s.index: s for s in probe.audio}
     if len(probe.audio) != len(audio_plan):
         reasons.append(
             PlanReason(
@@ -198,7 +199,7 @@ def plan_from_probe(input_path: str, probe: ProbeResult, profile: ProfileConfig)
         expected_codec = action.stream.codec if action.action == "copy" else action.codec
         expected_channels = action.stream.channels if action.action == "copy" else action.channels
         expected_title = _track_title(action.stream.language, expected_codec, expected_channels)
-        current = probe.audio[i] if i < len(probe.audio) else None
+        current = audio_by_index.get(action.stream.index)
         default = i == default_audio_pos
         if action.action == "copy":
             action_name: Literal["copy", "encode", "drop", "generate"] = "copy"
@@ -236,6 +237,7 @@ def plan_from_probe(input_path: str, probe: ProbeResult, profile: ProfileConfig)
             )
 
     subtitle_items: list[SubtitleTrackPlan] = []
+    sub_by_index = {s.index: s for s in probe.subtitles}
     if len(probe.subtitles) != len(kept_subs):
         reasons.append(
             PlanReason(
@@ -245,7 +247,7 @@ def plan_from_probe(input_path: str, probe: ProbeResult, profile: ProfileConfig)
             )
         )
     for i, sub in enumerate(kept_subs):
-        current = probe.subtitles[i] if i < len(probe.subtitles) else None
+        current = sub_by_index.get(sub.index)
         default = i == default_sub_pos
         subtitle_items.append(
             SubtitleTrackPlan(
