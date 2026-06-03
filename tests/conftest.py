@@ -20,7 +20,6 @@ general:
   workers: 1
   db_path: {tmp_path}/pyflows.db
   vaapi_device: /dev/dri/renderD128
-  settle_time: 0
   watcher_event_debounce_seconds: 0
   stable_for_seconds: 0
   ignore_suffixes: [.part, .tmp, .partial, .!qB]

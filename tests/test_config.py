@@ -45,14 +45,12 @@ def test_library_references_valid_profile(tmp_config):
 def test_hardware_and_queue_defaults(tmp_config):
     """New hardware/queue sections default correctly when omitted from YAML."""
     config = load_config(tmp_config)
-    assert config.hardware.acceleration == "vaapi"
     assert config.hardware.env == {"AMD_DEBUG": "noefc"}
     assert config.hardware.vaapi.device == "va"
     assert config.hardware.vaapi.hw_decode_codecs == ["hevc", "av1", "vp9"]
     assert config.hardware.vaapi.sw_decode_codecs == ["h264"]
     assert config.hardware.vaapi.upload_filter == "format=nv12,hwupload_vaapi"
     assert config.hardware.vaapi.async_depth == 4
-    assert config.hardware.vaapi.use_hw_encode is True
     assert config.queue.priority_codecs == []
 
 
@@ -71,7 +69,6 @@ profiles:
     output: { container: mkv, replace_original: true }
 libraries: []
 hardware:
-  acceleration: vaapi
   env:
     AMD_DEBUG: noefc
     LIBVA_DRIVER_NAME: radeonsi
@@ -81,7 +78,6 @@ hardware:
     sw_decode_codecs: [h264, mpeg2video]
     upload_filter: format=nv12,hwupload_vaapi,scale_vaapi
     async_depth: 6
-    use_hw_encode: true
 queue:
   priority_codecs: [vp9, hevc]
 """)
