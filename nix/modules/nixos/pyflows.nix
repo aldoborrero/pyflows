@@ -87,8 +87,9 @@ in
         ProtectSystem = "strict";
         ProtectHome = true;
         PrivateTmp = true;
-        ReadWritePaths = [ cfg.dataDir ] ++ lib.optionals (cfg.settings ? media_dir) [ cfg.settings.media_dir ]
-          ++ lib.optionals (cfg.settings ? output_dir) [ cfg.settings.output_dir ];
+        ReadWritePaths = [ cfg.dataDir ]
+          ++ lib.optionals (cfg.settings ? general && cfg.settings.general ? temp_dir) [ cfg.settings.general.temp_dir ]
+          ++ lib.optionals (cfg.settings ? libraries) (map (l: l.path) (lib.filter (l: l ? path) cfg.settings.libraries));
       }
       // lib.optionalAttrs (cfg.environmentFile != null) {
         EnvironmentFile = cfg.environmentFile;
