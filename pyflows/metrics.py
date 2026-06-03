@@ -42,47 +42,51 @@ service_up.set(1)
 
 def _collect(db_path: str) -> None:
     """Update all gauges from DB."""
+    conn = None
     try:
-        with sqlite3.connect(db_path) as conn:
-            cur = conn.cursor()
-            statuses = ("pending", "processing", "failed", "skipped", "completed")
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        statuses = ("pending", "processing", "failed", "skipped", "completed")
 
-            # Per-library stats
-            libraries = [
-                row[0] for row in
-                cur.execute("SELECT DISTINCT library FROM files WHERE library IS NOT NULL")
-            ]
-            for library in libraries:
-                for status in statuses:
-                    n = cur.execute(
-                        "SELECT count(*) FROM files WHERE library=? AND status=?",
-                        (library, status),
-                    ).fetchone()[0]
-                    files_gauge.labels(library=library, status=status).set(n)
-
-            # Global totals
+        # Per-library stats
+        libraries = [
+            row[0] for row in
+            cur.execute("SELECT DISTINCT library FROM files WHERE library IS NOT NULL")
+        ]
+        for library in libraries:
             for status in statuses:
                 n = cur.execute(
-                    "SELECT count(*) FROM files WHERE status=?", (status,)
+                    "SELECT count(*) FROM files WHERE library=? AND status=?",
+                    (library, status),
                 ).fetchone()[0]
-                encodes_total.labels(status=status).set(n)
+                files_gauge.labels(library=library, status=status).set(n)
 
-            # Current encode duration
-            row = cur.execute(
-                "SELECT started_at FROM files WHERE status='processing' "
-                "ORDER BY started_at DESC LIMIT 1"
-            ).fetchone()
-            if row and row[0]:
-                try:
-                    started = datetime.fromisoformat(row[0])
-                    now = datetime.now(timezone.utc)
-                    encode_duration.set((now - started).total_seconds())
-                except ValueError:
-                    encode_duration.set(0)
-            else:
+        # Global totals
+        for status in statuses:
+            n = cur.execute(
+                "SELECT count(*) FROM files WHERE status=?", (status,)
+            ).fetchone()[0]
+            encodes_total.labels(status=status).set(n)
+
+        # Current encode duration
+        row = cur.execute(
+            "SELECT started_at FROM files WHERE status='processing' "
+            "ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        if row and row[0]:
+            try:
+                started = datetime.fromisoformat(row[0])
+                now = datetime.now(timezone.utc)
+                encode_duration.set((now - started).total_seconds())
+            except ValueError:
                 encode_duration.set(0)
+        else:
+            encode_duration.set(0)
     except sqlite3.Error as e:
         log.warning("metrics: db collection error: %s", e)
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _collector_loop(db_path: str, interval: int = 15) -> None:
