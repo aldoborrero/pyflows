@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -21,6 +22,24 @@ from pyflows.scanner import scan_library
 
 console = Console()
 log = logging.getLogger("pyflows")
+
+
+def resolve_config(config_path: Path | None) -> Path:
+    if config_path is not None:
+        return config_path
+    env_path = os.environ.get("PYFLOWS_CONFIG")
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+    for candidate in [
+        Path.home() / ".config" / "pyflows" / "config.yaml",
+        Path("/etc/pyflows/config.yaml"),
+    ]:
+        if candidate.exists():
+            return candidate
+    console.print("[red]No config file found. Use --config or set PYFLOWS_CONFIG.[/red]")
+    sys.exit(1)
 
 
 def configure_logging(config: PyflowsConfig) -> None:
@@ -46,9 +65,10 @@ def main() -> None:
 
 
 @main.command()
-@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=True)
-def run(config_path: Path) -> None:
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
+def run(config_path: Path | None) -> None:
     """Start daemon (scanner + worker + watcher)."""
+    config_path = resolve_config(config_path)
     config = load_config(config_path)
     configure_logging(config)
     from pyflows.metrics import start_metrics_server
@@ -62,9 +82,10 @@ def run(config_path: Path) -> None:
 
 
 @main.command()
-@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=True)
-def scan(config_path: Path) -> None:
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
+def scan(config_path: Path | None) -> None:
     """One-off library scan, queue new files."""
+    config_path = resolve_config(config_path)
     config = load_config(config_path)
     configure_logging(config)
     total = 0
@@ -79,16 +100,18 @@ def scan(config_path: Path) -> None:
 @main.command()
 @click.argument("file_path", type=click.Path(exists=True))
 @click.option("--profile", required=True)
-@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=True)
-def encode(file_path: str, profile: str, config_path: Path) -> None:
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
+def encode(file_path: str, profile: str, config_path: Path | None) -> None:
     """Process a single file."""
+    config_path = resolve_config(config_path)
     config = load_config(config_path)
     configure_logging(config)
     if profile not in config.profiles:
         console.print(f"[red]Unknown profile: {profile}[/red]")
         sys.exit(1)
 
-    success, error, final_path = encode_file(
+    from pyflows.pipeline import EncodeStatus
+    result = encode_file(
         input_path=file_path,
         profile=config.profiles[profile],
         temp_dir=config.general.temp_dir,
@@ -98,18 +121,19 @@ def encode(file_path: str, profile: str, config_path: Path) -> None:
         hardware_config=config.hardware,
         stall_timeout=config.general.stall_timeout,
     )
-    if success:
-        message = error or f"encoded -> {final_path}"
+    if result.status != EncodeStatus.FAILED:
+        message = f"encoded -> {result.final_path}" if result.status == EncodeStatus.COMPLETED else "skipped"
         console.print(f"[green]Done:[/green] {message}")
     else:
-        console.print(f"[red]Failed:[/red] {error}")
+        console.print(f"[red]Failed:[/red] {result.error}")
         sys.exit(1)
 
 
 @main.command()
-@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=True)
-def status(config_path: Path) -> None:
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
+def status(config_path: Path | None) -> None:
     """Show queue status."""
+    config_path = resolve_config(config_path)
     config = load_config(config_path)
 
     table = Table(title="pyflows Queue Status")
@@ -128,10 +152,11 @@ def status(config_path: Path) -> None:
 
 
 @main.command()
-@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=True)
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
 @click.option("--limit", default=20, help="Number of records to show")
-def history(config_path: Path, limit: int) -> None:
+def history(config_path: Path | None, limit: int) -> None:
     """Show processing history."""
+    config_path = resolve_config(config_path)
     config = load_config(config_path)
 
     table = Table(title="Recent History")
@@ -170,10 +195,11 @@ def render_plan_json(plan: FilePlan) -> None:
 @main.command()
 @click.argument("file_path", type=click.Path(exists=True))
 @click.option("--profile", required=True)
-@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=True)
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
 @click.option("--json", "as_json", is_flag=True, help="Render the full file plan as JSON")
-def check(file_path: str, profile: str, config_path: Path, as_json: bool) -> None:
+def check(file_path: str, profile: str, config_path: Path | None, as_json: bool) -> None:
     """Dry run — show what would happen to a file."""
+    config_path = resolve_config(config_path)
     config = load_config(config_path)
     if profile not in config.profiles:
         console.print(f"[red]Unknown profile: {profile}[/red]")
@@ -250,10 +276,11 @@ def check(file_path: str, profile: str, config_path: Path, as_json: bool) -> Non
 @main.command()
 @click.argument("file_path", type=click.Path(exists=True))
 @click.option("--profile", required=True)
-@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=True)
-@click.option("--json", "as_json", is_flag=True, default=True, help="Render the full file plan as JSON")
-def plan(file_path: str, profile: str, config_path: Path, as_json: bool) -> None:
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
+@click.option("--json", "as_json", is_flag=True, default=False, help="Render the full file plan as JSON")
+def plan(file_path: str, profile: str, config_path: Path | None, as_json: bool) -> None:
     """Render the explicit file plan for inspection or machine consumption."""
+    config_path = resolve_config(config_path)
     config = load_config(config_path)
     if profile not in config.profiles:
         console.print(f"[red]Unknown profile: {profile}[/red]")
@@ -265,6 +292,43 @@ def plan(file_path: str, profile: str, config_path: Path, as_json: bool) -> None
         render_plan_json(file_plan)
     else:
         console.print(file_plan)
+
+
+@main.command()
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
+@click.option("--file", "file_path", type=str, default=None, help="Retry a specific failed file")
+@click.option("--all", "all_failed", is_flag=True, help="Retry all failed files")
+def retry(config_path: Path | None, file_path: str | None, all_failed: bool) -> None:
+    """Re-queue failed files for processing."""
+    config_path = resolve_config(config_path)
+    config = load_config(config_path)
+    if not file_path and not all_failed:
+        console.print("[red]Specify --file <path> or --all[/red]")
+        sys.exit(1)
+    with FileDB(config.general.db_path) as db:
+        if all_failed:
+            count = db.retry_all_failed()
+            console.print(f"[green]Reset {count} failed files to pending[/green]")
+        elif file_path:
+            if db.retry_failed(file_path):
+                console.print(f"[green]Reset to pending:[/green] {file_path}")
+            else:
+                console.print(f"[yellow]No failed record found for:[/yellow] {file_path}")
+
+
+@main.command()
+@click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), required=False, default=None)
+@click.option("--processing", is_flag=True, help="Reset stuck processing files to pending")
+def reset(config_path: Path | None, processing: bool) -> None:
+    """Reset stuck files (crash recovery)."""
+    config_path = resolve_config(config_path)
+    config = load_config(config_path)
+    if not processing:
+        console.print("[red]Specify --processing to reset stuck files[/red]")
+        sys.exit(1)
+    with FileDB(config.general.db_path) as db:
+        count = db.reset_processing()
+        console.print(f"[green]Reset {count} processing files to pending[/green]")
 
 
 if __name__ == "__main__":
