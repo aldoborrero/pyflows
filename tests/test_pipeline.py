@@ -7,7 +7,7 @@ import threading
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from pyflows.pipeline import analyze_changes, analyze_changes_detailed, build_encode_command, encode_file, should_skip, TrackTitle
+from pyflows.pipeline import EncodeStatus, analyze_changes, analyze_changes_detailed, build_encode_command, encode_file, should_skip, TrackTitle
 from pyflows.probe import parse_probe_output
 from pyflows.config import load_config
 
@@ -306,16 +306,16 @@ def test_encode_file_full_pipeline(tmp_config, tmp_path: Path) -> None:
 
     with patch("subprocess.run", side_effect=fake_run), \
          patch("subprocess.Popen", FakePopen):
-        success, error, final_path = encode_file(
+        result = encode_file(
             input_path=str(input_file),
             profile=profile,
             temp_dir=temp_dir,
             vaapi_device="/dev/dri/renderD128",
         )
 
-    assert success is True
-    assert error == ""
-    assert final_path == str(input_file)
+    assert result.status == EncodeStatus.COMPLETED
+    assert result.error == ""
+    assert result.final_path == str(input_file)
     # VAAPI failed once, CPU fallback ran => Popen called twice
     assert popen_call_count == 2
     # Original file should have been replaced (same path, smaller size from CPU encode)
@@ -343,16 +343,15 @@ def test_encode_file_skip_already_encoded(tmp_config, tmp_path: Path) -> None:
         )
 
     with patch("subprocess.run", side_effect=fake_run):
-        success, error, final_path = encode_file(
+        result = encode_file(
             input_path=str(input_file),
             profile=profile,
             temp_dir=str(tmp_path / "temp"),
             vaapi_device="/dev/dri/renderD128",
         )
 
-    assert success is True
-    assert error == "skipped"
-    assert final_path == str(input_file)
+    assert result.status == EncodeStatus.SKIPPED
+    assert result.final_path == str(input_file)
 
 
 def test_encode_file_honors_output_container(tmp_config, tmp_path: Path) -> None:
@@ -419,15 +418,15 @@ def test_encode_file_honors_output_container(tmp_config, tmp_path: Path) -> None
 
     with patch("subprocess.run", side_effect=fake_run), \
          patch("subprocess.Popen", FakePopen):
-        success, error, final_path = encode_file(
+        result = encode_file(
             input_path=str(input_file),
             profile=profile,
             temp_dir=temp_dir,
             vaapi_device="/dev/dri/renderD128",
         )
 
-    assert success is True
-    assert error == ""
-    assert final_path.endswith(".mkv")
-    assert Path(final_path).exists()
+    assert result.status == EncodeStatus.COMPLETED
+    assert result.error == ""
+    assert result.final_path.endswith(".mkv")
+    assert Path(result.final_path).exists()
     assert not input_file.exists()

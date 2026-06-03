@@ -1,10 +1,13 @@
 """Encode pipeline: probe → decide → build → encode → verify → replace."""
 
+import enum
+import errno
 import logging
 import os
 import shutil
 import subprocess
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from pyflows.audio import AudioAction, build_audio_plan
@@ -16,6 +19,20 @@ from pyflows.probe import ProbeResult, StreamInfo, probe_file
 from pyflows.subtitles import filter_subtitles
 
 log = logging.getLogger(__name__)
+
+
+class EncodeStatus(enum.StrEnum):
+    COMPLETED = "completed"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+@dataclass
+class EncodeResult:
+    status: EncodeStatus
+    final_path: str
+    error: str = ""
+
 
 # Codec to encoder mapping
 VAAPI_ENCODERS = {"hevc": "hevc_vaapi", "av1": "av1_vaapi"}
@@ -216,25 +233,22 @@ def encode_file(
     ffprobe_path: str = "ffprobe",
     hardware_config: HardwareConfig | None = None,
     stall_timeout: int = 300,
-) -> tuple[bool, str, str]:
-    """Run the full encode pipeline for a single file.
-
-    Returns (success, error_message, final_output_path).
-    """
+) -> EncodeResult:
+    """Run the full encode pipeline for a single file."""
     # Probe + plan
     try:
         plan = plan_file(input_path, profile, ffprobe_path=ffprobe_path)
     except subprocess.CalledProcessError as e:
-        return False, f"ffprobe failed: {e}", input_path
+        return EncodeResult(EncodeStatus.FAILED, input_path, f"ffprobe failed: {e}")
 
     # Skip check
     if plan.should_skip:
-        return True, "skipped", input_path
+        return EncodeResult(EncodeStatus.SKIPPED, input_path)
 
     # Disk space check
     input_size = Path(input_path).stat().st_size
     if not check_disk_space(temp_dir, input_size):
-        return False, "Insufficient disk space", input_path
+        return EncodeResult(EncodeStatus.FAILED, input_path, "Insufficient disk space")
 
     # Build temp output path
     output_ext = _container_suffix(profile)
@@ -278,15 +292,15 @@ def encode_file(
 
             if result.returncode != 0:
                 Path(output_path).unlink(missing_ok=True)
-                return False, f"Both VAAPI and CPU encode failed: {result.stderr[-500:]}", input_path
+                return EncodeResult(EncodeStatus.FAILED, input_path, f"Both VAAPI and CPU encode failed: {result.stderr[-500:]}")
         else:
             Path(output_path).unlink(missing_ok=True)
-            return False, f"Encode failed: {result.stderr[-500:]}", input_path
+            return EncodeResult(EncodeStatus.FAILED, input_path, f"Encode failed: {result.stderr[-500:]}")
 
     # Verify output
     if not verify_output(output_path):
         Path(output_path).unlink(missing_ok=True)
-        return False, "Output validation failed", input_path
+        return EncodeResult(EncodeStatus.FAILED, input_path, "Output validation failed")
 
     final_path = output_path
 
@@ -294,25 +308,31 @@ def encode_file(
         target_path = str(Path(input_path).with_suffix(output_ext))
         if target_path != input_path and Path(target_path).exists():
             Path(output_path).unlink(missing_ok=True)
-            return False, f"Target output path already exists: {target_path}", input_path
+            return EncodeResult(EncodeStatus.FAILED, input_path, f"Target output path already exists: {target_path}")
 
-        target_dir = Path(target_path).parent
-        tmp_path = str(target_dir / f".{Path(target_path).name}.tmp")
         try:
-            shutil.copy2(output_path, tmp_path)
-            os.replace(tmp_path, target_path)
+            os.rename(output_path, target_path)
         except OSError as exc:
-            Path(tmp_path).unlink(missing_ok=True)
+            if exc.errno != errno.EXDEV:
+                Path(output_path).unlink(missing_ok=True)
+                return EncodeResult(EncodeStatus.FAILED, input_path, f"Failed to replace original: {exc}")
+            target_dir = Path(target_path).parent
+            tmp_path = str(target_dir / f".{Path(target_path).name}.tmp")
+            try:
+                shutil.copy2(output_path, tmp_path)
+                os.replace(tmp_path, target_path)
+            except OSError as copy_exc:
+                Path(tmp_path).unlink(missing_ok=True)
+                Path(output_path).unlink(missing_ok=True)
+                return EncodeResult(EncodeStatus.FAILED, input_path, f"Failed to replace original: {copy_exc}")
+            except BaseException:
+                Path(tmp_path).unlink(missing_ok=True)
+                raise
             Path(output_path).unlink(missing_ok=True)
-            return False, f"Failed to replace original: {exc}", input_path
-        except BaseException:
-            Path(tmp_path).unlink(missing_ok=True)
-            raise
-        Path(output_path).unlink(missing_ok=True)
         if target_path != input_path and Path(input_path).exists():
             os.unlink(input_path)
         final_path = target_path
     else:
         log_event(log, logging.INFO, "output_written", "Output written without replacing original", file_path=output_path)
 
-    return True, "", final_path
+    return EncodeResult(EncodeStatus.COMPLETED, final_path)
