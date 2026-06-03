@@ -115,7 +115,7 @@ def status(config_path: Path) -> None:
     with FileDB(config.general.db_path) as db:
         for s in [FileStatus.PENDING, FileStatus.PROCESSING, FileStatus.COMPLETED,
                   FileStatus.FAILED, FileStatus.SKIPPED]:
-            count = len(db.get_by_status(s, limit=10000))
+            count = db.count_by_status(s)
             color = {"pending": "yellow", "processing": "cyan", "completed": "green",
                      "failed": "red", "skipped": "dim"}.get(s, "")
             table.add_row(f"[{color}]{s}[/{color}]", str(count))

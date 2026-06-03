@@ -63,6 +63,7 @@ class FileDB:
         try:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.executescript(SCHEMA)
             self.conn = conn
             self._migrate_schema()
@@ -122,6 +123,10 @@ class FileDB:
             (status, limit),
         )
         return cur.fetchall()
+
+    def count_by_status(self, status: str) -> int:
+        cur = self.conn.execute("SELECT count(*) FROM files WHERE status=?", (status,))
+        return cur.fetchone()[0]
 
     def get_next_pending(
         self,
@@ -342,13 +347,11 @@ class FileDB:
 
     def set_arr_metadata(self, path: str, source: str, arr_id: int | None) -> None:
         """Store arr source and ID for rescan callback after encoding."""
-        self.conn.execute(
+        cur = self.conn.execute(
             "UPDATE files SET arr_source=?, arr_id=? WHERE path=?",
             (source, arr_id, path),
         )
-        # If no row exists yet (file queued directly via webhook before scan),
-        # the UPDATE is a no-op. The metadata table handles this case.
-        if self.conn.total_changes == 0:
+        if cur.rowcount == 0:
             self.conn.execute(
                 "INSERT OR REPLACE INTO arr_metadata (path, source, arr_id) VALUES (?, ?, ?)",
                 (path, source, arr_id),
