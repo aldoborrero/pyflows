@@ -25,7 +25,7 @@ def _map_path(path: str, mappings: dict[str, str]) -> str:
             mapped = local_prefix + path[len(arr_prefix):]
             # Resolve to prevent path traversal (e.g. ../../etc/passwd)
             resolved = str(Path(mapped).resolve())
-            if not resolved.startswith(str(Path(local_prefix).resolve())):
+            if not Path(resolved).is_relative_to(Path(local_prefix).resolve()):
                 return path  # Reject traversal attempt
             return resolved
     return path
@@ -34,7 +34,7 @@ def _map_path(path: str, mappings: dict[str, str]) -> str:
 def _resolve_library(path: str, config: PyflowsConfig) -> str | None:
     """Find which library profile a file belongs to based on its path."""
     for lib in config.libraries:
-        if path.startswith(lib.path):
+        if Path(path).is_relative_to(lib.path):
             return lib.profile
     return None
 
@@ -46,6 +46,9 @@ class _WebhookHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         content_length = int(self.headers.get("Content-Length", 0))
+        if content_length > 1_048_576:
+            self._respond(413, {"error": "request too large"})
+            return
         body = self.rfile.read(content_length)
 
         if self.path == "/webhook/sonarr":
@@ -145,7 +148,7 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             log_event(log, logging.WARNING, "webhook_file_not_found",
                       "Webhook file not found after path mapping",
                       arr_path=arr_path, local_path=local_path, source=source)
-            self._respond(404, {"error": "file not found", "path": local_path})
+            self._respond(404, {"error": "file not found"})
             return
 
         profile = _resolve_library(local_path, self.config)
@@ -153,7 +156,7 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             log_event(log, logging.WARNING, "webhook_no_library",
                       "File path does not match any configured library",
                       local_path=local_path, source=source)
-            self._respond(400, {"error": "no matching library", "path": local_path})
+            self._respond(400, {"error": "no matching library"})
             return
 
         # Store arr metadata for rescan callback
@@ -165,7 +168,7 @@ class _WebhookHandler(BaseHTTPRequestHandler):
                   "Queued file from webhook",
                   source=source, arr_path=arr_path, local_path=local_path,
                   profile=profile, arr_id=arr_id)
-        self._respond(200, {"status": "queued", "profile": profile, "path": local_path})
+        self._respond(200, {"status": "queued", "profile": profile})
 
     def _respond(self, code: int, body: JsonResponse) -> None:
         self.send_response(code)
@@ -178,8 +181,8 @@ class _WebhookHandler(BaseHTTPRequestHandler):
         pass
 
 
-def start_webhook_server(config: PyflowsConfig, encode_task: Callable[[str, str], object]) -> threading.Thread | None:
-    """Start the webhook HTTP server in a background thread. Returns None if disabled."""
+def start_webhook_server(config: PyflowsConfig, encode_task: Callable[[str, str], object]) -> HTTPServer | None:
+    """Start the webhook HTTP server in a background thread. Returns the server or None if disabled."""
     if not config.webhook or not config.webhook.enabled:
         return None
 
@@ -199,4 +202,4 @@ def start_webhook_server(config: PyflowsConfig, encode_task: Callable[[str, str]
 
     log_event(log, logging.INFO, "webhook_started",
               "Webhook server started", port=webhook_config.port)
-    return thread
+    return server
