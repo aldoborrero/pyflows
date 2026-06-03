@@ -17,6 +17,7 @@ from pyflows.logging_utils import log_event
 log = logging.getLogger(__name__)
 
 DEFAULT_STALL_TIMEOUT = 300  # Kill if no progress for 5 minutes
+STARTUP_TIMEOUT = 600  # Kill if ffmpeg never starts producing progress (10 minutes)
 STDERR_TAIL_BYTES = 1000
 _OUT_TIME_US_PREFIX = b"out_time_us="
 
@@ -242,21 +243,29 @@ class FFmpegCommand:
             reader.start()
 
             # Poll for stall or completion
+            start_time = time.monotonic()
             while proc.poll() is None:
                 time.sleep(5)
                 with progress_lock:
                     if last_progress_time is None:
                         # No progress line received yet (ffmpeg still analyzing input).
-                        # Don't apply stall detection until encoding actually starts.
-                        continue
-                    elapsed_since_progress = time.monotonic() - last_progress_time
-                if elapsed_since_progress > stall_timeout:
-                    stalled.set()
-                    log_event(log, logging.ERROR, "ffmpeg_stall",
-                              "ffmpeg stalled, no progress — sending SIGTERM",
-                              stall_seconds=int(elapsed_since_progress),
-                              last_out_time_us=last_out_time_us,
-                              stall_timeout=stall_timeout)
+                        if time.monotonic() - start_time > STARTUP_TIMEOUT:
+                            stalled.set()
+                            log_event(log, logging.ERROR, "ffmpeg_startup_timeout",
+                                      "ffmpeg never started producing progress — sending SIGTERM",
+                                      start_timeout=STARTUP_TIMEOUT)
+                        else:
+                            continue
+                    else:
+                        elapsed_since_progress = time.monotonic() - last_progress_time
+                        if elapsed_since_progress > stall_timeout:
+                            stalled.set()
+                            log_event(log, logging.ERROR, "ffmpeg_stall",
+                                      "ffmpeg stalled, no progress — sending SIGTERM",
+                                      stall_seconds=int(elapsed_since_progress),
+                                      last_out_time_us=last_out_time_us,
+                                      stall_timeout=stall_timeout)
+                if stalled.is_set():
                     proc.terminate()
                     try:
                         proc.wait(timeout=10)
@@ -272,9 +281,13 @@ class FFmpegCommand:
             if stalled.is_set():
                 stderr_file.seek(max(0, stderr_file.tell() - STDERR_TAIL_BYTES))
                 tail = stderr_file.read().decode("utf-8", errors="replace")
+                if last_progress_time is None:
+                    reason = f"[STARTUP TIMEOUT: no progress output for {STARTUP_TIMEOUT}s]"
+                else:
+                    reason = f"[STALL detected: no progress for {stall_timeout}s]"
                 return subprocess.CompletedProcess(
                     args=args, returncode=-1, stdout="",
-                    stderr=f"[STALL detected: no progress for {stall_timeout}s] {tail}",
+                    stderr=f"{reason} {tail}",
                 )
 
             pos = stderr_file.tell()
