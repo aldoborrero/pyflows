@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 type ConfigValue = str | dict[str, "ConfigValue"] | list["ConfigValue"] | int | float | bool | None
@@ -36,13 +36,12 @@ class GeneralConfig(BaseModel):
     temp_dir: str
     log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
     log_output: str = "stdout"
-    log_format: str = "text"
+    log_format: Literal["json", "text"] = "text"
     workers: int = 1
     db_path: str
     vaapi_device: str = "/dev/dri/renderD128"
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
-    settle_time: int = 60
     watcher_event_debounce_seconds: int = 5
     stable_for_seconds: int = 30
     ignore_suffixes: list[str] = [".part", ".tmp", ".partial", ".!qB"]
@@ -56,10 +55,17 @@ class GeneralConfig(BaseModel):
 class VideoConfig(BaseModel):
     codec: str  # hevc, av1
     bit_depth: int = 10
-    encoder: str = "vaapi"
+    encoder: Literal["vaapi", "cpu"] = "vaapi"
     quality: int = 22
-    fallback: str = "cpu"
+    fallback: Literal["cpu", "none"] = "cpu"
     skip_codecs: list[str] = []
+
+    @field_validator("quality")
+    @classmethod
+    def _validate_quality(cls, v: int) -> int:
+        if not 0 <= v <= 51:
+            raise ValueError(f"quality must be between 0 and 51, got {v}")
+        return v
 
 
 class StereoConfig(BaseModel):
@@ -108,6 +114,7 @@ class LibraryConfig(BaseModel):
 class WebhookConfig(BaseModel):
     enabled: bool = False
     port: int = 9328
+    api_key: str = ""
     path_mappings: dict[str, str] = Field(default_factory=dict)
 
 
@@ -146,11 +153,9 @@ class VaapiConfig(BaseModel):
     sw_decode_codecs: list[str] = Field(default_factory=lambda: ["h264"])
     upload_filter: str = "format=nv12,hwupload_vaapi"
     async_depth: int = 4
-    use_hw_encode: bool = True
 
 
 class HardwareConfig(BaseModel):
-    acceleration: str = "vaapi"
     env: dict[str, str] = Field(default_factory=lambda: {"AMD_DEBUG": "noefc"})
     vaapi: VaapiConfig = Field(default_factory=VaapiConfig)
 

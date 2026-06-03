@@ -45,6 +45,11 @@ class _WebhookHandler(BaseHTTPRequestHandler):
     encode_task: Callable[[str, str], object]
 
     def do_POST(self) -> None:
+        if self.webhook_config.api_key:
+            provided = self.headers.get("X-Api-Key", "")
+            if provided != self.webhook_config.api_key:
+                self._respond(401, {"error": "unauthorized"})
+                return
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length > 1_048_576:
             self._respond(413, {"error": "request too large"})
@@ -55,16 +60,24 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._handle_sonarr(body)
         elif self.path == "/webhook/radarr":
             self._handle_radarr(body)
-        elif self.path == "/health":
-            self._respond(200, {"status": "ok"})
         else:
             self._respond(404, {"error": "not found"})
 
     def do_GET(self) -> None:
-        if self.path == "/health":
+        if self.path == "/healthz":
             self._respond(200, {"status": "ok"})
+        elif self.path == "/readyz":
+            self._check_ready()
         else:
             self._respond(404, {"error": "not found"})
+
+    def _check_ready(self) -> None:
+        try:
+            with FileDB(self.config.general.db_path) as db:
+                db.count_by_status("pending")
+            self._respond(200, {"status": "ready"})
+        except Exception:
+            self._respond(503, {"status": "not ready"})
 
     def _handle_sonarr(self, body: bytes) -> None:
         try:
