@@ -52,7 +52,11 @@ def run(config_path: Path) -> None:
     config = load_config(config_path)
     configure_logging(config)
     from pyflows.metrics import start_metrics_server
-    start_metrics_server(config.general.metrics_port, config.general.db_path)
+    try:
+        start_metrics_server(config.general.metrics_port, config.general.db_path)
+    except OSError as e:
+        log.error("Failed to start metrics server on port %d: %s", config.general.metrics_port, e)
+        sys.exit(1)
     from pyflows.tasks import start_daemon
     start_daemon(config)
 

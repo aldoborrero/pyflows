@@ -63,5 +63,5 @@ def probe_file(path: str, ffprobe_path: str = "ffprobe") -> ProbeResult:
         "-show_streams",
         path,
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
     return parse_probe_output(proc.stdout)
