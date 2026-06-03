@@ -1,6 +1,5 @@
 """Tests for configuration loading and validation."""
 
-import os
 import pytest  # type: ignore[import-not-found]
 from pathlib import Path
 
@@ -96,9 +95,9 @@ queue:
     assert config.queue.priority_codecs == ["vp9", "hevc"]
 
 
-def test_env_var_expansion(tmp_path):
+def test_env_var_expansion(tmp_path, monkeypatch):
     """Environment variables in ${VAR} syntax are expanded."""
-    os.environ["TEST_API_KEY"] = "secret123"
+    monkeypatch.setenv("TEST_API_KEY", "secret123")
     config_file = tmp_path / "config.yaml"
     config_file.write_text("""
 general:
@@ -135,7 +134,6 @@ notifications:
 """)
     config = load_config(config_file)
     assert config.notifications.jellyfin.api_key == "secret123"
-    del os.environ["TEST_API_KEY"]
 
 
 def test_invalid_config_missing_profiles(tmp_path):

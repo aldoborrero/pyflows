@@ -1,7 +1,9 @@
 """Tests for the encode pipeline (probe->decide->build->encode->verify->replace)."""
 
+import io
 import json
 import subprocess
+import threading
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
@@ -238,7 +240,7 @@ def test_encode_file_full_pipeline(tmp_config, tmp_path: Path) -> None:
     Path(temp_dir).mkdir(parents=True, exist_ok=True)
 
     probe_json = json.dumps(SAMPLE_PROBE)
-    call_count = 0
+    popen_call_count = 0
 
     def fake_run(
         args: list[str],
@@ -250,23 +252,60 @@ def test_encode_file_full_pipeline(tmp_config, tmp_path: Path) -> None:
         capture_output: bool = False,
         env: object = None,
     ) -> subprocess.CompletedProcess[str]:
-        nonlocal call_count
+        """Handles ffprobe calls (subprocess.run) and verify_output probes."""
         if args[0] == "ffprobe":
             return subprocess.CompletedProcess(args=args, returncode=0, stdout=probe_json, stderr="")
-        if args[0] == "ffmpeg":
-            call_count += 1
-            # Find the output path (last arg)
-            output_path = args[-1]
-            if call_count == 1:
-                # VAAPI fails
-                return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="vaapi error")
-            else:
-                # CPU fallback succeeds — write a fake output file
-                Path(output_path).write_bytes(b"\x00" * 3000)
-                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
         return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="unknown")
 
-    with patch("subprocess.run", side_effect=fake_run):
+    class FakePopen:
+        """Simulates subprocess.Popen for FFmpegCommand.run() progress monitoring."""
+
+        def __init__(self, args, stdout=None, stderr=None, env=None):
+            nonlocal popen_call_count
+            popen_call_count += 1
+            self.args = args
+            self._call_number = popen_call_count
+            # Find output path: it's the last arg (after -progress pipe:1 -nostats insertion)
+            self._output_path = args[-1]
+            # Provide progress lines that the reader thread consumes
+            self.stdout = io.BytesIO(b"out_time_us=1000000\nout_time_us=2000000\n")
+            # stderr is a file object passed by the caller (tempfile); just use what was given
+            self.stderr = stderr
+            self._returncode: int | None = None
+            self._poll_count = 0
+
+        def poll(self):
+            self._poll_count += 1
+            if self._poll_count >= 1:
+                # Process completes immediately on first poll
+                if self._call_number == 1:
+                    self._returncode = 1  # VAAPI fails
+                else:
+                    # CPU fallback succeeds — write a fake output file
+                    Path(self._output_path).write_bytes(b"\x00" * 3000)
+                    self._returncode = 0
+                return self._returncode
+            return None
+
+        @property
+        def returncode(self):
+            return self._returncode
+
+        @returncode.setter
+        def returncode(self, value):
+            self._returncode = value
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            return self._returncode
+
+    with patch("subprocess.run", side_effect=fake_run), \
+         patch("subprocess.Popen", FakePopen):
         success, error, final_path = encode_file(
             input_path=str(input_file),
             profile=profile,
@@ -277,8 +316,8 @@ def test_encode_file_full_pipeline(tmp_config, tmp_path: Path) -> None:
     assert success is True
     assert error == ""
     assert final_path == str(input_file)
-    # VAAPI failed once, CPU fallback ran, verify ran => ffmpeg called twice
-    assert call_count == 2
+    # VAAPI failed once, CPU fallback ran => Popen called twice
+    assert popen_call_count == 2
     # Original file should have been replaced (same path, smaller size from CPU encode)
     assert input_file.stat().st_size == 3000
 
@@ -340,15 +379,46 @@ def test_encode_file_honors_output_container(tmp_config, tmp_path: Path) -> None
         capture_output: bool = False,
         env: object = None,
     ) -> subprocess.CompletedProcess[str]:
+        """Handles ffprobe calls (subprocess.run) and verify_output probes."""
         if args[0] == "ffprobe":
             return subprocess.CompletedProcess(args=args, returncode=0, stdout=probe_json, stderr="")
-        if args[0] == "ffmpeg":
-            output_path = args[-1]
-            Path(output_path).write_bytes(b"\x00" * 3000)
-            return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
         return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="unknown")
 
-    with patch("subprocess.run", side_effect=fake_run):
+    class FakePopen:
+        """Simulates subprocess.Popen for FFmpegCommand.run() progress monitoring."""
+
+        def __init__(self, args, stdout=None, stderr=None, env=None):
+            self.args = args
+            self._output_path = args[-1]
+            self.stdout = io.BytesIO(b"out_time_us=1000000\nout_time_us=2000000\n")
+            self.stderr = stderr
+            self._returncode: int | None = None
+
+        def poll(self):
+            # Write the output file and complete immediately
+            Path(self._output_path).write_bytes(b"\x00" * 3000)
+            self._returncode = 0
+            return 0
+
+        @property
+        def returncode(self):
+            return self._returncode
+
+        @returncode.setter
+        def returncode(self, value):
+            self._returncode = value
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            return self._returncode
+
+    with patch("subprocess.run", side_effect=fake_run), \
+         patch("subprocess.Popen", FakePopen):
         success, error, final_path = encode_file(
             input_path=str(input_file),
             profile=profile,

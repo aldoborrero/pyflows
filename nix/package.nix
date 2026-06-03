@@ -43,11 +43,7 @@ python313.pkgs.buildPythonApplication {
     pytestCheckHook
   ] ++ [ ffmpeg-full ];
 
-  # Pipeline tests require real media files / VAAPI hardware
-  disabledTests = [
-    "test_encode_file_full_pipeline"
-    "test_encode_file_honors_output_container"
-  ];
+  disabledTests = [];
 
   meta = with lib; {
     description = "Media library transcoder with VAAPI hardware encoding";
