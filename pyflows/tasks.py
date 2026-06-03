@@ -2,6 +2,7 @@
 
 import logging
 import random
+import re
 import signal
 import threading
 from datetime import datetime, timedelta, timezone
@@ -224,16 +225,29 @@ def _do_encode(file_path: str, profile_name: str) -> None:
     with FileDB(config.general.db_path) as db:
         db.update_status(file_path, FileStatus.PROCESSING)
 
-        success, error, final_path = encode_file(
-            input_path=file_path,
-            profile=profile,
-            temp_dir=config.general.temp_dir,
-            vaapi_device=config.general.vaapi_device,
-            ffmpeg_path=config.general.ffmpeg_path,
-            ffprobe_path=config.general.ffprobe_path,
-            hardware_config=config.hardware,
-            stall_timeout=config.general.stall_timeout,
-        )
+        try:
+            success, error, final_path = encode_file(
+                input_path=file_path,
+                profile=profile,
+                temp_dir=config.general.temp_dir,
+                vaapi_device=config.general.vaapi_device,
+                ffmpeg_path=config.general.ffmpeg_path,
+                ffprobe_path=config.general.ffprobe_path,
+                hardware_config=config.hardware,
+                stall_timeout=config.general.stall_timeout,
+            )
+        except Exception as exc:
+            db.update_status(file_path, FileStatus.FAILED, error=str(exc))
+            log_event(
+                log,
+                logging.ERROR,
+                "encode_exception",
+                "Unexpected exception during encode",
+                file_path=file_path,
+                profile=profile_name,
+                error=str(exc),
+            )
+            return
 
         if error == "skipped":
             db.update_status(file_path, FileStatus.SKIPPED)
@@ -242,7 +256,6 @@ def _do_encode(file_path: str, profile_name: str) -> None:
             if final_path != file_path:
                 db.rename_path(file_path, final_path)
             output_size = Path(final_path).stat().st_size
-            # Update hash to match the new file so watcher won't re-queue
             new_hash = compute_file_hash(final_path)
             db.update_hash(final_path, new_hash, output_size)
             db.update_status(final_path, FileStatus.COMPLETED,
@@ -257,8 +270,7 @@ def _do_encode(file_path: str, profile_name: str) -> None:
                 output_codec=profile.video.codec,
                 output_size=output_size,
             )
-            # Get arr metadata for rescan callback
-            arr_source, arr_id = db.get_arr_metadata(file_path)
+            arr_source, arr_id = db.get_arr_metadata(final_path)
             notifier.on_success(final_path, arr_source=arr_source, arr_id=arr_id)
         else:
             retry_count, _ = db.get_retry_info(file_path)
@@ -332,6 +344,12 @@ class _MediaFileHandler(FileSystemEventHandler):  # type: ignore[misc]
             self._timers[path] = timer
             timer.start()
 
+    def stop(self) -> None:
+        with self._lock:
+            for timer in self._timers.values():
+                timer.cancel()
+            self._timers.clear()
+
     def _handle(self, path: str) -> None:
         with self._lock:
             self._timers.pop(path, None)
@@ -385,14 +403,12 @@ def start_daemon(config: PyflowsConfig) -> None:
                 log_event(log, logging.INFO, "codec_backfill_done",
                           "Codec backfill complete", count=len(rows))
 
-    # Derive temp file extensions from configured profiles' output containers
-    temp_extensions = {f".{p.output.container}" for p in config.profiles.values()}
-
-    # Clean temp files
+    # Clean stale pyflows temp files (pattern: stem_8hexchars.ext)
+    _TEMP_PATTERN = re.compile(r"^.+_[0-9a-f]{8}\..+$")
     temp_dir = Path(config.general.temp_dir)
     if temp_dir.exists():
         for f in temp_dir.iterdir():
-            if f.is_file() and f.suffix in temp_extensions:
+            if f.is_file() and _TEMP_PATTERN.match(f.name):
                 f.unlink()
                 log_event(log, logging.INFO, "temp_file_cleaned", "Cleaned stale temp file", file_path=str(f))
 
@@ -400,10 +416,11 @@ def start_daemon(config: PyflowsConfig) -> None:
     encode_task = _register_tasks()
 
     # Start webhook server (both modes)
-    start_webhook_server(config, encode_task)
+    webhook_server = start_webhook_server(config, encode_task)
 
     # File watcher and scanner (daemon mode only)
     observer = None
+    handler = None
     if mode == "daemon":
         observer = Observer()
         handler = _MediaFileHandler(config, encode_task)
@@ -445,7 +462,11 @@ def start_daemon(config: PyflowsConfig) -> None:
         shutdown.wait()
     finally:
         consumer.stop()
+        if handler is not None:
+            handler.stop()
         if observer is not None:
             observer.stop()
             observer.join()
+        if webhook_server is not None:
+            webhook_server.shutdown()
         log_event(log, logging.INFO, "daemon_stopped", "pyflows daemon stopped")
