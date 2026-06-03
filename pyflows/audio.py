@@ -26,12 +26,18 @@ def build_audio_plan(streams: list[StreamInfo], config: AudioConfig) -> list[Aud
     Returns a list of AudioAction describing each output audio track:
     copy (passthrough original) or encode (new AAC stereo).
     """
-    # 1. Filter to keep_languages
-    kept = [s for s in streams if s.language in config.keep_languages]
+    # 1. Filter to keep_languages (empty = keep all)
+    if config.keep_languages:
+        kept = [s for s in streams if s.language in config.keep_languages]
+    else:
+        kept = list(streams)
 
-    # 2. Remove commentary
+    # 2. Remove commentary (fall back to pre-filter list if all removed)
     if config.remove_commentary:
+        before_commentary = list(kept)
         kept = [s for s in kept if not COMMENTARY_PATTERN.search(s.title)]
+        if not kept and before_commentary:
+            kept = before_commentary
 
     # 3. Sort by priority
     priority_map = {lang: i for i, lang in enumerate(config.priority)}

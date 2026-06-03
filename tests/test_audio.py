@@ -111,6 +111,30 @@ def test_default_language_prefers_matching_track_for_first_default_candidate():
     assert first.stream.language == "jpn"
 
 
+def test_empty_keep_languages_keeps_all():
+    """Empty keep_languages keeps all audio tracks (same as subtitle behavior)."""
+    streams = [
+        _make_audio(1, "eac3", 6, "eng"),
+        _make_audio(2, "aac", 2, "fre"),
+        _make_audio(3, "aac", 2, "spa"),
+    ]
+    plan = build_audio_plan(streams, _make_config(keep_languages=[]))
+    languages = [a.stream.language for a in plan if a.action == "copy"]
+    assert "eng" in languages
+    assert "fre" in languages
+    assert "spa" in languages
+
+
+def test_all_commentary_falls_back():
+    """If all matching tracks are commentary, keep them rather than producing silent output."""
+    streams = [
+        _make_audio(1, "eac3", 6, "eng", title="Director Commentary"),
+        _make_audio(2, "aac", 2, "eng", title="Audio Description"),
+    ]
+    plan = build_audio_plan(streams, _make_config())
+    assert len(plan) > 0
+
+
 def test_stereo_after_original_per_language():
     """Stereo copy comes right after its original, grouped by language."""
     streams = [
