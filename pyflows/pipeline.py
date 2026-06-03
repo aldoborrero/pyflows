@@ -299,14 +299,25 @@ def encode_file(
 
     final_path = output_path
 
-    # Replace original (shutil.move handles cross-filesystem moves)
     if profile.output.replace_original:
         target_path = str(Path(input_path).with_suffix(output_ext))
         if target_path != input_path and Path(target_path).exists():
             Path(output_path).unlink(missing_ok=True)
             return False, f"Target output path already exists: {target_path}", input_path
 
-        shutil.move(output_path, target_path)
+        target_dir = Path(target_path).parent
+        tmp_path = str(target_dir / f".{Path(target_path).name}.tmp")
+        try:
+            shutil.copy2(output_path, tmp_path)
+            os.replace(tmp_path, target_path)
+        except OSError as exc:
+            Path(tmp_path).unlink(missing_ok=True)
+            Path(output_path).unlink(missing_ok=True)
+            return False, f"Failed to replace original: {exc}", input_path
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
+        Path(output_path).unlink(missing_ok=True)
         if target_path != input_path and Path(input_path).exists():
             os.unlink(input_path)
         final_path = target_path
