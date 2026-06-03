@@ -1,13 +1,11 @@
 # nix/packages/pyflows/pyflows/audio.py
 """Audio track selection, filtering, and stereo track creation."""
 
-import re
 from dataclasses import dataclass
 
 from pyflows.config import AudioConfig
+from pyflows.constants import COMMENTARY_PATTERN
 from pyflows.probe import StreamInfo
-
-COMMENTARY_PATTERN = re.compile(r"commentary|director|description", re.IGNORECASE)
 
 
 @dataclass

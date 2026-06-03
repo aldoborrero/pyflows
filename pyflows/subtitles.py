@@ -1,12 +1,9 @@
 # nix/packages/pyflows/pyflows/subtitles.py
 """Subtitle stream filtering by language, format, and title."""
 
-import re
-
 from pyflows.config import SubtitleConfig
+from pyflows.constants import COMMENTARY_PATTERN
 from pyflows.probe import StreamInfo
-
-COMMENTARY_PATTERN = re.compile(r"commentary|director|description", re.IGNORECASE)
 
 # Map short format names to ffprobe codec names
 FORMAT_ALIASES = {
