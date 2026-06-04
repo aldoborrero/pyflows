@@ -14,11 +14,13 @@ from huey import SqliteHuey, crontab  # type: ignore[import-not-found]
 from watchdog.observers import Observer  # type: ignore[import-not-found]
 from watchdog.events import FileSystemEventHandler  # type: ignore[import-not-found]
 
-from pyflows.config import PyflowsConfig, LibraryConfig
+from pyflows.config import PyflowsConfig, LibraryConfig, ProfileConfig
 from pyflows.db import FileDB, FileStatus, compute_file_hash
+from pyflows.hooks import run_hooks
 from pyflows.logging_utils import log_event
 from pyflows.notify import Notifier
 from pyflows.pipeline import EncodeStatus, encode_file
+from pyflows.ffmpeg import terminate_active_encode
 from pyflows.scanner import _probe_codec, scan_library
 from pyflows.webhook import start_webhook_server
 
@@ -181,6 +183,86 @@ def _do_release_held_files() -> None:
                           file_path=path, library=str(record["library"]), codec=codec)
 
 
+def _select_best_file(
+    file_path: str,
+    profile_name: str,
+    db: FileDB,
+    priority_codecs: list[str],
+) -> tuple[str, str]:
+    """Pick a higher-priority pending file if one exists, re-queuing the original."""
+    best = db.get_next_pending(priority_codecs=priority_codecs)
+    if best is not None and best["path"] != file_path:
+        assert _encode_task is not None
+        _encode_task(file_path, profile_name)
+        log_event(log, logging.INFO, "encode_priority_swap",
+                  "Swapped to higher-priority file",
+                  original=file_path, selected=best["path"])
+        return best["path"], best["profile"]
+    return file_path, profile_name
+
+
+def _handle_encode_success(
+    db: FileDB,
+    file_path: str,
+    final_path: str,
+    profile_name: str,
+    profile: ProfileConfig,
+    notifier: Notifier,
+    config: PyflowsConfig,
+) -> None:
+    """Update DB, notify, and run hooks after a successful encode."""
+    if final_path != file_path:
+        db.rename_path(file_path, final_path)
+    output_size = Path(final_path).stat().st_size
+    new_hash = compute_file_hash(final_path)
+    db.update_hash(final_path, new_hash, output_size)
+    db.update_status(final_path, FileStatus.COMPLETED,
+                     output_codec=profile.video.codec, output_size=output_size)
+    log_event(
+        log, logging.INFO, "encode_completed", "Completed file encode",
+        file_path=final_path, profile=profile_name,
+        output_codec=profile.video.codec, output_size=output_size,
+    )
+    arr_source, arr_id = db.get_arr_metadata(final_path)
+    notifier.on_success(final_path, arr_source=arr_source, arr_id=arr_id)
+    run_hooks(config.hooks.post_encode, "post_encode", final_path,
+              profile=profile_name, output_path=final_path, status="completed")
+
+
+def _handle_encode_failure(
+    db: FileDB,
+    file_path: str,
+    error: str,
+    profile_name: str,
+    config: PyflowsConfig,
+    notifier: Notifier,
+) -> None:
+    """Schedule a retry for transient errors or mark the file as permanently failed."""
+    retry_count, _ = db.get_retry_info(file_path)
+    next_retry_count = retry_count + 1
+    if _is_transient_error(error) and retry_count < config.general.max_retries:
+        delay = int(config.general.retry_backoff_seconds * (2 ** retry_count) * random.uniform(0.5, 1.5))
+        next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        db.schedule_retry(file_path, error, next_retry_count, next_retry_at)
+        log_event(
+            log, logging.WARNING, "encode_retry_scheduled",
+            "Scheduled retry for failed encode",
+            file_path=file_path, profile=profile_name, reason=error,
+            retry_count=next_retry_count, next_retry_at=next_retry_at.isoformat(),
+        )
+    else:
+        db.update_status(file_path, FileStatus.FAILED, error=error)
+        log_event(
+            log, logging.ERROR, "encode_failed", "Failed file encode",
+            file_path=file_path, profile=profile_name, reason=error,
+            retry_count=next_retry_count if _is_transient_error(error) else retry_count,
+            terminal=not _is_transient_error(error) or retry_count >= config.general.max_retries,
+        )
+        notifier.on_failure(file_path, error)
+        run_hooks(config.hooks.on_failure, "on_failure", file_path,
+                  profile=profile_name, status="failed", error=error)
+
+
 def _do_encode(file_path: str, profile_name: str) -> None:
     """Encode a single file using its profile.
 
@@ -203,17 +285,8 @@ def _do_encode(file_path: str, profile_name: str) -> None:
     # get_next_pending() and double-encode it.  The warning in start_daemon()
     # guards against misconfiguration.
     with FileDB(config.general.db_path) as _check_db:
-        best = _check_db.get_next_pending(priority_codecs=config.resolved_priority_codecs())
-        if best is not None and best["path"] != file_path:
-            # Re-queue the requested file and encode the better candidate.
-            assert _encode_task is not None
-            _encode_task(file_path, profile_name)
-            original_path = file_path
-            file_path = best["path"]
-            profile_name = best["profile"]
-            log_event(log, logging.INFO, "encode_priority_swap",
-                      "Swapped to higher-priority file",
-                      original=original_path, selected=file_path)
+        file_path, profile_name = _select_best_file(
+            file_path, profile_name, _check_db, config.resolved_priority_codecs())
 
     if profile_name not in config.profiles:
         log_event(log, logging.ERROR, "unknown_profile", "Unknown profile after priority swap", profile=profile_name)
@@ -224,6 +297,11 @@ def _do_encode(file_path: str, profile_name: str) -> None:
 
     with FileDB(config.general.db_path) as db:
         db.update_status(file_path, FileStatus.PROCESSING)
+
+        if config.hooks.pre_encode:
+            if not run_hooks(config.hooks.pre_encode, "pre_encode", file_path, profile=profile_name):
+                db.update_status(file_path, FileStatus.FAILED, error="pre_encode hook failed")
+                return
 
         try:
             result = encode_file(
@@ -238,73 +316,23 @@ def _do_encode(file_path: str, profile_name: str) -> None:
             )
         except Exception as exc:
             db.update_status(file_path, FileStatus.FAILED, error=str(exc))
-            log_event(
-                log,
-                logging.ERROR,
-                "encode_exception",
-                "Unexpected exception during encode",
-                file_path=file_path,
-                profile=profile_name,
-                error=str(exc),
-            )
+            log_event(log, logging.ERROR, "encode_exception",
+                      "Unexpected exception during encode",
+                      file_path=file_path, profile=profile_name, error=str(exc))
             return
 
         if result.status == EncodeStatus.SKIPPED:
             db.update_status(file_path, FileStatus.SKIPPED)
-            log_event(log, logging.INFO, "encode_skipped", "Skipped file", file_path=file_path, profile=profile_name)
+            log_event(log, logging.INFO, "encode_skipped", "Skipped file",
+                      file_path=file_path, profile=profile_name)
+            run_hooks(config.hooks.on_skip, "on_skip", file_path,
+                      profile=profile_name, status="skipped")
         elif result.status == EncodeStatus.COMPLETED:
-            if result.final_path != file_path:
-                db.rename_path(file_path, result.final_path)
-            output_size = Path(result.final_path).stat().st_size
-            new_hash = compute_file_hash(result.final_path)
-            db.update_hash(result.final_path, new_hash, output_size)
-            db.update_status(result.final_path, FileStatus.COMPLETED,
-                             output_codec=profile.video.codec, output_size=output_size)
-            log_event(
-                log,
-                logging.INFO,
-                "encode_completed",
-                "Completed file encode",
-                file_path=result.final_path,
-                profile=profile_name,
-                output_codec=profile.video.codec,
-                output_size=output_size,
-            )
-            arr_source, arr_id = db.get_arr_metadata(result.final_path)
-            notifier.on_success(result.final_path, arr_source=arr_source, arr_id=arr_id)
+            _handle_encode_success(db, file_path, result.final_path,
+                                   profile_name, profile, notifier, config)
         else:
-            error = result.error
-            retry_count, _ = db.get_retry_info(file_path)
-            next_retry_count = retry_count + 1
-            if _is_transient_error(error) and retry_count < config.general.max_retries:
-                delay = int(config.general.retry_backoff_seconds * (2 ** retry_count) * random.uniform(0.5, 1.5))
-                next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
-                db.schedule_retry(file_path, error, next_retry_count, next_retry_at)
-                log_event(
-                    log,
-                    logging.WARNING,
-                    "encode_retry_scheduled",
-                    "Scheduled retry for failed encode",
-                    file_path=file_path,
-                    profile=profile_name,
-                    reason=error,
-                    retry_count=next_retry_count,
-                    next_retry_at=next_retry_at.isoformat(),
-                )
-            else:
-                db.update_status(file_path, FileStatus.FAILED, error=error)
-                log_event(
-                    log,
-                    logging.ERROR,
-                    "encode_failed",
-                    "Failed file encode",
-                    file_path=file_path,
-                    profile=profile_name,
-                    reason=error,
-                    retry_count=next_retry_count if _is_transient_error(error) else retry_count,
-                    terminal=not _is_transient_error(error) or retry_count >= config.general.max_retries,
-                )
-                notifier.on_failure(file_path, error)
+            _handle_encode_failure(db, file_path, result.error,
+                                   profile_name, config, notifier)
 
 
 class _MediaFileHandler(FileSystemEventHandler):  # type: ignore[misc]
@@ -372,7 +400,7 @@ class _MediaFileHandler(FileSystemEventHandler):  # type: ignore[misc]
                 return
 
 
-def start_daemon(config: PyflowsConfig) -> None:
+def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = None) -> None:
     """Start the pyflows daemon.
 
     Modes:
@@ -438,6 +466,7 @@ def start_daemon(config: PyflowsConfig) -> None:
 
     def signal_handler(sig: int, frame: FrameType | None) -> None:
         log_event(log, logging.INFO, "shutdown_requested", "Shutting down daemon")
+        terminate_active_encode()
         shutdown.set()
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -470,4 +499,6 @@ def start_daemon(config: PyflowsConfig) -> None:
             observer.join()
         if webhook_server is not None:
             webhook_server.shutdown()
+        if metrics_stop is not None:
+            metrics_stop.set()
         log_event(log, logging.INFO, "daemon_stopped", "pyflows daemon stopped")
