@@ -59,6 +59,7 @@ class VideoConfig(BaseModel):
     quality: int = 22
     fallback: Literal["cpu", "none"] = "cpu"
     skip_codecs: list[str] = []
+    hdr_policy: Literal["copy", "tonemap", "encode"] = "copy"
 
     @field_validator("quality")
     @classmethod
@@ -164,6 +165,13 @@ class QueueConfig(BaseModel):
     priority_codecs: list[str] = Field(default_factory=list)
 
 
+class HooksConfig(BaseModel):
+    pre_encode: list[str] = Field(default_factory=list)
+    post_encode: list[str] = Field(default_factory=list)
+    on_failure: list[str] = Field(default_factory=list)
+    on_skip: list[str] = Field(default_factory=list)
+
+
 class PyflowsConfig(BaseModel):
     general: GeneralConfig
     profiles: dict[str, ProfileConfig]
@@ -171,6 +179,7 @@ class PyflowsConfig(BaseModel):
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     hardware: HardwareConfig = Field(default_factory=HardwareConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
+    hooks: HooksConfig = Field(default_factory=HooksConfig)
     webhook: WebhookConfig | None = None
 
     def resolved_priority_codecs(self) -> list[str]:

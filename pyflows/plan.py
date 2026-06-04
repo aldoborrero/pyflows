@@ -176,6 +176,16 @@ def plan_from_probe(input_path: str, probe: ProbeResult, profile: ProfileConfig)
             )
         )
 
+    if probe.is_hdr() and profile.video.hdr_policy == "copy" and video_action == "encode":
+        video_action = "copy"
+        reasons.append(
+            PlanReason(
+                code="video_codec_mismatch",
+                message="HDR content preserved (hdr_policy=copy)",
+                scope="video",
+            )
+        )
+
     if Path(input_path).suffix.lower() != output_ext.lower():
         reasons.append(
             PlanReason(

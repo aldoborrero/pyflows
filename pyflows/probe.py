@@ -16,6 +16,9 @@ class StreamInfo:
     width: int = 0
     height: int = 0
     is_default: bool = False
+    color_transfer: str = ""
+    color_primaries: str = ""
+    color_space: str = ""
 
 
 @dataclass
@@ -23,6 +26,12 @@ class ProbeResult:
     video: StreamInfo | None = None
     audio: list[StreamInfo] = field(default_factory=list)
     subtitles: list[StreamInfo] = field(default_factory=list)
+
+    def is_hdr(self) -> bool:
+        if self.video is None:
+            return False
+        hdr_transfers = {"smpte2084", "arib-std-b67"}
+        return self.video.color_transfer in hdr_transfers
 
 
 def parse_probe_output(raw_json: str) -> ProbeResult:
@@ -43,6 +52,9 @@ def parse_probe_output(raw_json: str) -> ProbeResult:
             width=stream.get("width", 0),
             height=stream.get("height", 0),
             is_default=bool(disposition.get("default", 0)),
+            color_transfer=stream.get("color_transfer", ""),
+            color_primaries=stream.get("color_primaries", ""),
+            color_space=stream.get("color_space", ""),
         )
 
         if info.codec_type == "video" and result.video is None:
