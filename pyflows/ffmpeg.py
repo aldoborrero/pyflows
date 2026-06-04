@@ -20,6 +20,48 @@ DEFAULT_STALL_TIMEOUT = 300  # Kill if no progress for 5 minutes
 STARTUP_TIMEOUT = 600  # Kill if ffmpeg never starts producing progress (10 minutes)
 STDERR_TAIL_BYTES = 1000
 _OUT_TIME_US_PREFIX = b"out_time_us="
+_SPEED_PREFIX = b"speed="
+
+_active_proc: subprocess.Popen | None = None  # type: ignore[type-arg]
+_active_proc_lock = threading.Lock()
+
+
+@dataclass
+class EncodeProgress:
+    """Snapshot of real-time encode progress."""
+
+    out_time_us: int = 0
+    speed: float = 0.0
+    file_path: str = ""
+
+
+_current_progress = EncodeProgress()
+_progress_data_lock = threading.Lock()
+
+
+def get_current_progress() -> EncodeProgress:
+    """Return a copy of the current encode progress."""
+    with _progress_data_lock:
+        return EncodeProgress(
+            out_time_us=_current_progress.out_time_us,
+            speed=_current_progress.speed,
+            file_path=_current_progress.file_path,
+        )
+
+
+def _set_progress(file_path: str, out_time_us: int, speed: float) -> None:
+    with _progress_data_lock:
+        _current_progress.file_path = file_path
+        _current_progress.out_time_us = out_time_us
+        _current_progress.speed = speed
+
+
+def _clear_progress() -> None:
+    with _progress_data_lock:
+        _current_progress.file_path = ""
+        _current_progress.out_time_us = 0
+        _current_progress.speed = 0.0
+
 
 # Default codecs where VAAPI hardware decode is confirmed reliable on AMD/Mesa.
 # These use Pipeline 1 (HW decode + HW encode): fast full-GPU path.
@@ -214,6 +256,13 @@ class FFmpegCommand:
                 env=env,
             )
 
+            global _active_proc
+            with _active_proc_lock:
+                _active_proc = proc
+
+            input_path = self._inputs[0][0] if self._inputs else ""
+            _set_progress(input_path, 0, 0.0)
+
             # Track progress from stdout in a background thread.
             # Stall clock starts only after the first progress line is received,
             # so ffmpeg's initial input analysis phase doesn't trigger a false stall.
@@ -224,6 +273,7 @@ class FFmpegCommand:
 
             def _read_progress() -> None:
                 nonlocal last_progress_time, last_out_time_us
+                current_speed = 0.0
                 assert proc.stdout is not None
                 try:
                     for line in proc.stdout:
@@ -234,6 +284,13 @@ class FFmpegCommand:
                                     if value > last_out_time_us:
                                         last_out_time_us = value
                                         last_progress_time = time.monotonic()
+                                _set_progress(input_path, value, current_speed)
+                            except ValueError:
+                                pass
+                        elif line.startswith(_SPEED_PREFIX):
+                            try:
+                                raw = line[len(_SPEED_PREFIX):].strip().rstrip(b"x")
+                                current_speed = float(raw)
                             except ValueError:
                                 pass
                 except (OSError, ValueError):
@@ -285,6 +342,9 @@ class FFmpegCommand:
                     reason = f"[STARTUP TIMEOUT: no progress output for {STARTUP_TIMEOUT}s]"
                 else:
                     reason = f"[STALL detected: no progress for {stall_timeout}s]"
+                with _active_proc_lock:
+                    _active_proc = None
+                _clear_progress()
                 return subprocess.CompletedProcess(
                     args=args, returncode=-1, stdout="",
                     stderr=f"{reason} {tail}",
@@ -294,6 +354,24 @@ class FFmpegCommand:
             stderr_file.seek(max(0, pos - STDERR_TAIL_BYTES))
             stderr_tail = stderr_file.read().decode("utf-8", errors="replace")
 
+        with _active_proc_lock:
+            _active_proc = None
+        _clear_progress()
         return subprocess.CompletedProcess(
             args=args, returncode=proc.returncode, stdout="", stderr=stderr_tail,
         )
+
+
+def terminate_active_encode() -> None:
+    """Terminate the active ffmpeg process, if any.
+
+    Called during daemon shutdown so SIGTERM is not blocked waiting for
+    a long-running encode to finish on its own.
+    """
+    with _active_proc_lock:
+        proc = _active_proc
+    if proc is not None:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
