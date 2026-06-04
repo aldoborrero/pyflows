@@ -23,7 +23,7 @@
   <td>{{ f['completed_at']|relative_time }}</td>
   <td>
     {% if f['status'] == 'failed' %}
-    <button hx-post="/ui/api/retry" hx-vals='{"path": "{{ f['path'] }}"}' hx-target="closest tr" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Retry</button>
+    <button hx-post="/ui/api/retry" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Retry</button>
     {% endif %}
   </td>
 </tr>

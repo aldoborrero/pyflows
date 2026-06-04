@@ -19,10 +19,10 @@
   {% endif %}
   <div role="group">
     {% if file['status'] == 'failed' %}
-    <button hx-post="/ui/api/retry" hx-vals='{"path": "{{ file['path'] }}"}' hx-target="#file-detail" hx-swap="outerHTML" class="outline">Retry</button>
+    <button hx-post="/ui/api/retry" hx-vals='{{ {"path": file["path"]}|tojson|e }}' hx-target="#file-detail" hx-swap="outerHTML" class="outline">Retry</button>
     {% endif %}
     {% if file['status'] == 'pending' %}
-    <button hx-post="/ui/api/skip" hx-vals='{"path": "{{ file['path'] }}"}' hx-target="#file-detail" hx-swap="outerHTML" class="outline secondary">Skip</button>
+    <button hx-post="/ui/api/skip" hx-vals='{{ {"path": file["path"]}|tojson|e }}' hx-target="#file-detail" hx-swap="outerHTML" class="outline secondary">Skip</button>
     {% endif %}
   </div>
 </article>

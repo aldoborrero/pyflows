@@ -306,6 +306,17 @@ class FileDB:
         self.conn.commit()
         return cur.rowcount
 
+    def reencode(self, path: str) -> bool:
+        """Reset a completed or skipped file to pending for re-encoding."""
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, error=NULL, retry_count=0, next_retry_at=NULL, "
+            "output_codec=NULL, output_size=NULL, started_at=NULL, completed_at=NULL "
+            "WHERE path=? AND status IN (?, ?)",
+            (FileStatus.PENDING, path, FileStatus.COMPLETED, FileStatus.SKIPPED),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def get_history(self, limit: int = 100) -> list[sqlite3.Row]:
         """Return recent completed/failed/skipped records sorted by completed_at DESC."""
         cur = self.conn.execute(

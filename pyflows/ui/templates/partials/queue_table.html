@@ -12,7 +12,7 @@
   </td>
   <td>
     {% if f['status'] == 'pending' %}
-    <button hx-post="/ui/api/skip" hx-vals='{"path": "{{ f['path'] }}"}' hx-target="closest tr" hx-swap="delete" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Skip</button>
+    <button hx-post="/ui/api/skip" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="delete" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Skip</button>
     {% endif %}
   </td>
 </tr>

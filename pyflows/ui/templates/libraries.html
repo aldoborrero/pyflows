@@ -37,7 +37,7 @@
     <span class="badge badge-saved">{{ lib.saved|human_size }} saved</span>
   </div>
   <footer>
-    <button hx-post="/ui/api/scan" hx-vals='{"library": "{{ lib.library }}"}' hx-target="#library-{{ lib.library|replace(' ', '-') }}" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Scan Now</button>
+    <button hx-post="/ui/api/scan" hx-vals='{{ {"library": lib.library}|tojson|e }}' hx-target="#library-{{ lib.library|replace(' ', '-') }}" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Scan Now</button>
   </footer>
 </article>
 {% endfor %}

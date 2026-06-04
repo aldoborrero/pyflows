@@ -26,7 +26,16 @@ def _relative_time(iso_str: str | None) -> str:
         delta = datetime.now(timezone.utc) - dt
         seconds = int(delta.total_seconds())
         if seconds < 0:
-            return "just now"
+            seconds = abs(seconds)
+            if seconds < 60:
+                return f"in {seconds}s"
+            minutes = seconds // 60
+            if minutes < 60:
+                return f"in {minutes}m"
+            hours = minutes // 60
+            if hours < 24:
+                return f"in {hours}h"
+            return f"in {hours // 24}d"
         if seconds < 60:
             return f"{seconds}s ago"
         minutes = seconds // 60
@@ -116,8 +125,6 @@ class UIRenderer:
                 kwargs["has_hold"] = True
             elif filter_val == "retry":
                 kwargs["has_retry"] = True
-            else:
-                kwargs["status"] = "pending"
             if query:
                 kwargs["query"] = query
             if library:

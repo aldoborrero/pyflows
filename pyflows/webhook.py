@@ -49,7 +49,7 @@ class _WebhookHandler(BaseHTTPRequestHandler):
     ui_renderer: UIRenderer | None
 
     def do_POST(self) -> None:
-        if self.webhook_config.api_key:
+        if self.path.startswith("/webhook/") and self.webhook_config.api_key:
             provided = self.headers.get("X-Api-Key", "")
             if provided != self.webhook_config.api_key:
                 self._respond(401, {"error": "unauthorized"})
@@ -67,7 +67,7 @@ class _WebhookHandler(BaseHTTPRequestHandler):
         elif self.path == "/ui/api/retry":
             self._handle_ui_retry(body)
         elif self.path == "/ui/api/retry-all":
-            self._handle_ui_retry_all()
+            self._handle_ui_retry_all(body)
         elif self.path == "/ui/api/skip":
             self._handle_ui_skip(body)
         elif self.path == "/ui/api/reencode":
@@ -319,16 +319,10 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._respond(400, {"error": "missing path"})
             return
         with FileDB(self.config.general.db_path) as db:
-            record = db.get(path)
-            if record is None or record["status"] not in ("completed", "skipped"):
+            if db.reencode(path):
+                self._respond_html(200, "<p>Re-queued for encoding</p>")
+            else:
                 self._respond(404, {"error": "not found or not eligible"})
-                return
-            db.conn.execute(
-                "UPDATE files SET status='pending', error=NULL, retry_count=0, "
-                "next_retry_at=NULL, output_codec=NULL, output_size=NULL, "
-                "started_at=NULL, completed_at=NULL WHERE path=?", (path,))
-            db.conn.commit()
-        self._respond_html(200, "<p>Re-queued for encoding</p>")
 
     def _handle_ui_scan(self, body: bytes) -> None:
         params = urllib.parse.parse_qs(body.decode())
@@ -340,7 +334,12 @@ class _WebhookHandler(BaseHTTPRequestHandler):
         if not matching:
             self._respond(404, {"error": "library not found"})
             return
-        self._respond_html(200, "<p>Scan queued</p>")
+        lib = matching[0]
+        from pyflows.scanner import scan_library
+        with FileDB(self.config.general.db_path) as db:
+            scan_library(lib, db, ffprobe_path=self.config.general.ffprobe_path,
+                         priority_codecs=self.config.resolved_priority_codecs())
+        self._respond_html(200, "<p>Scan complete</p>")
 
     def _serve_static(self) -> None:
         if self.ui_renderer is None:
@@ -387,8 +386,8 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             pass
 
     def _send_sse_event(self, event: str, data: str) -> None:
-        lines = data.replace("\n", " ").strip()
-        payload = f"event: {event}\ndata: {lines}\n\n"
+        data_lines = "\n".join(f"data: {line}" for line in data.strip().splitlines())
+        payload = f"event: {event}\n{data_lines}\n\n"
         self.wfile.write(payload.encode())
         self.wfile.flush()
 
@@ -412,10 +411,17 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             else:
                 self._respond(404, {"error": "not found or not failed"})
 
-    def _handle_ui_retry_all(self) -> None:
+    def _handle_ui_retry_all(self, body: bytes) -> None:
         with FileDB(self.config.general.db_path) as db:
             count = db.retry_all_failed()
-        html = self.ui_renderer.render_partial_failed_table() if self.ui_renderer else ""
+        if not self.ui_renderer:
+            self._respond_html(200, "")
+            return
+        referer = self.headers.get("Referer", "")
+        if "/ui/history" in referer:
+            html = self.ui_renderer.render_history_partial()
+        else:
+            html = self.ui_renderer.render_partial_failed_table()
         self._respond_html(200, html)
 
     def _respond(self, code: int, body: JsonResponse) -> None:
