@@ -70,6 +70,10 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._handle_ui_retry_all()
         elif self.path == "/ui/api/skip":
             self._handle_ui_skip(body)
+        elif self.path == "/ui/api/reencode":
+            self._handle_ui_reencode(body)
+        elif self.path == "/ui/api/scan":
+            self._handle_ui_scan(body)
         else:
             self._respond(404, {"error": "not found"})
 
@@ -84,6 +88,14 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._serve_ui_page("queue")
         elif self.path.startswith("/ui/history"):
             self._serve_ui_page("history")
+        elif self.path.startswith("/ui/libraries"):
+            self._serve_ui_page("libraries")
+        elif self.path.startswith("/ui/settings"):
+            self._serve_ui_page("settings")
+        elif self.path.startswith("/ui/files/"):
+            self._serve_file_detail()
+        elif self.path.startswith("/ui/partials/file-detail/"):
+            self._serve_file_detail_partial()
         elif self.path == "/ui/events":
             self._serve_sse()
         elif self.path.startswith("/ui/partials/queue-table"):
@@ -225,6 +237,10 @@ class _WebhookHandler(BaseHTTPRequestHandler):
                 status_filter=params.get("status", [""])[0],
                 library_filter=params.get("library", [""])[0],
             )
+        elif page == "libraries":
+            html = self.ui_renderer.render_libraries()
+        elif page == "settings":
+            html = self.ui_renderer.render_settings()
         else:
             self._respond(404, {"error": "not found"})
             return
@@ -265,6 +281,66 @@ class _WebhookHandler(BaseHTTPRequestHandler):
                 self._respond_html(200, "")
             else:
                 self._respond(404, {"error": "not found or not pending"})
+
+    def _serve_file_detail(self) -> None:
+        if self.ui_renderer is None:
+            self._respond(404, {"error": "UI not enabled"})
+            return
+        try:
+            file_id = int(self.path.split("/ui/files/")[1].split("?")[0])
+        except (ValueError, IndexError):
+            self._respond(404, {"error": "invalid file id"})
+            return
+        html = self.ui_renderer.render_file_detail(file_id)
+        if html is None:
+            self._respond(404, {"error": "file not found"})
+            return
+        self._respond_html(200, html)
+
+    def _serve_file_detail_partial(self) -> None:
+        if self.ui_renderer is None:
+            self._respond(404, {"error": "UI not enabled"})
+            return
+        try:
+            file_id = int(self.path.split("/ui/partials/file-detail/")[1].split("?")[0])
+        except (ValueError, IndexError):
+            self._respond(404, {"error": "invalid file id"})
+            return
+        html = self.ui_renderer.render_file_detail_partial(file_id)
+        if html is None:
+            self._respond(404, {"error": "file not found"})
+            return
+        self._respond_html(200, html)
+
+    def _handle_ui_reencode(self, body: bytes) -> None:
+        params = urllib.parse.parse_qs(body.decode())
+        path = params.get("path", [""])[0]
+        if not path:
+            self._respond(400, {"error": "missing path"})
+            return
+        with FileDB(self.config.general.db_path) as db:
+            record = db.get(path)
+            if record is None or record["status"] not in ("completed", "skipped"):
+                self._respond(404, {"error": "not found or not eligible"})
+                return
+            db.conn.execute(
+                "UPDATE files SET status='pending', error=NULL, retry_count=0, "
+                "next_retry_at=NULL, output_codec=NULL, output_size=NULL, "
+                "started_at=NULL, completed_at=NULL WHERE path=?", (path,))
+            db.conn.commit()
+        self._respond_html(200, "<p>Re-queued for encoding</p>")
+
+    def _handle_ui_scan(self, body: bytes) -> None:
+        params = urllib.parse.parse_qs(body.decode())
+        library = params.get("library", [""])[0]
+        if not library:
+            self._respond(400, {"error": "missing library"})
+            return
+        matching = [lib for lib in self.config.libraries if lib.name == library]
+        if not matching:
+            self._respond(404, {"error": "library not found"})
+            return
+        self._respond_html(200, "<p>Scan queued</p>")
 
     def _serve_static(self) -> None:
         if self.ui_renderer is None:

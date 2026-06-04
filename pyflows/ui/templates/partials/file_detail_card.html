@@ -1,0 +1,28 @@
+<article id="file-detail"
+  {% if file['status'] in ('pending', 'processing') %}
+  hx-get="/ui/partials/file-detail/{{ file_id }}" hx-trigger="every 5s" hx-swap="outerHTML" hx-target="#file-detail"
+  {% endif %}>
+  <header>
+    <strong>{{ file['path'].split('/')[-1] }}</strong>
+    <span class="badge badge-{{ file['status'] }}" style="float:right">{{ file['status'] }}</span>
+  </header>
+  <p class="muted" style="word-break:break-all">{{ file['path'] }}</p>
+  <dl>
+    <dt>Status</dt><dd><span class="badge badge-{{ file['status'] }}">{{ file['status'] }}</span></dd>
+    <dt>Library</dt><dd>{{ file['library'] }}</dd>
+    <dt>Codec</dt><dd>{{ file['video_codec'] or '—' }}{% if file['output_codec'] %} &rarr; {{ file['output_codec'] }}{% endif %}</dd>
+    {% if file['error'] %}<dt>Error</dt><dd><pre style="margin:0"><code>{{ file['error'] }}</code></pre></dd>{% endif %}
+  </dl>
+  {% if progress and progress.file_path == file['path'] %}
+  <progress value="{{ progress.out_time_us }}" max="{{ progress.out_time_us + 1 }}"></progress>
+  <p>Speed: <strong>{{ "%.1f"|format(progress.speed) }}x</strong></p>
+  {% endif %}
+  <div role="group">
+    {% if file['status'] == 'failed' %}
+    <button hx-post="/ui/api/retry" hx-vals='{"path": "{{ file['path'] }}"}' hx-target="#file-detail" hx-swap="outerHTML" class="outline">Retry</button>
+    {% endif %}
+    {% if file['status'] == 'pending' %}
+    <button hx-post="/ui/api/skip" hx-vals='{"path": "{{ file['path'] }}"}' hx-target="#file-detail" hx-swap="outerHTML" class="outline secondary">Skip</button>
+    {% endif %}
+  </div>
+</article>

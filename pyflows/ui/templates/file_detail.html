@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title_suffix %} — {{ file['path'].split('/')[-1] }}{% endblock %}
+{% block content %}
+<a href="javascript:history.back()">&larr; Back</a>
+
+<article id="file-detail"
+  {% if file['status'] in ('pending', 'processing') %}
+  hx-get="/ui/partials/file-detail/{{ file_id }}" hx-trigger="every 5s" hx-swap="outerHTML" hx-target="#file-detail"
+  {% endif %}>
+  <header>
+    <strong>{{ file['path'].split('/')[-1] }}</strong>
+    <span class="badge badge-{{ file['status'] }}" style="float:right">{{ file['status'] }}</span>
+  </header>
+
+  <p class="muted" style="word-break:break-all">{{ file['path'] }}</p>
+
+  <h4>Metadata</h4>
+  <dl>
+    <dt>Library</dt><dd>{{ file['library'] }}</dd>
+    <dt>Profile</dt><dd>{{ file['profile'] }}</dd>
+    <dt>Video Codec</dt><dd>{{ file['video_codec'] or '—' }}{% if file['output_codec'] %} &rarr; {{ file['output_codec'] }}{% endif %}</dd>
+    <dt>Input Size</dt><dd>{{ file['size']|human_size }}</dd>
+    {% if file['output_size'] %}
+    <dt>Output Size</dt>
+    <dd>
+      {{ file['output_size']|human_size }}
+      {% set delta = file['size'] - file['output_size'] %}
+      {% if delta > 0 %}
+      (<span class="saved-positive">-{{ delta|human_size }}, {{ (delta / file['size'] * 100)|round(1) }}%</span>)
+      {% elif delta < 0 %}
+      (<span class="saved-negative">+{{ (-delta)|human_size }}</span>)
+      {% endif %}
+    </dd>
+    {% endif %}
+    {% if file['arr_source'] %}
+    <dt>Source</dt><dd>{{ file['arr_source'] }}{% if file['arr_id'] %} (#{{ file['arr_id'] }}){% endif %}</dd>
+    {% endif %}
+    <dt>File Hash</dt><dd><code>{{ file['file_hash'][:16] }}...</code></dd>
+  </dl>
+
+  <h4>Timing</h4>
+  <dl>
+    <dt>Created</dt><dd>{{ file['created_at'] or '—' }} ({{ file['created_at']|relative_time }})</dd>
+    <dt>Started</dt><dd>{{ file['started_at'] or '—' }} ({{ file['started_at']|relative_time }})</dd>
+    <dt>Completed</dt><dd>{{ file['completed_at'] or '—' }} ({{ file['completed_at']|relative_time }})</dd>
+    <dt>Retry Count</dt><dd>{{ file['retry_count'] or 0 }}</dd>
+    {% if file['next_retry_at'] %}
+    <dt>Next Retry</dt><dd>{{ file['next_retry_at'] }} ({{ file['next_retry_at']|relative_time }})</dd>
+    {% endif %}
+    {% if file['hold_until'] %}
+    <dt>Hold Until</dt><dd>{{ file['hold_until'] }} ({{ file['hold_until']|relative_time }})</dd>
+    {% endif %}
+  </dl>
+
+  {% if file['error'] %}
+  <h4>Error</h4>
+  <pre><code>{{ file['error'] }}</code></pre>
+  {% endif %}
+
+  {% if progress and progress.file_path == file['path'] %}
+  <h4>Encode Progress</h4>
+  <progress value="{{ progress.out_time_us }}" max="{{ progress.out_time_us + 1 }}"></progress>
+  <p>Speed: <strong>{{ "%.1f"|format(progress.speed) }}x</strong></p>
+  {% endif %}
+
+  <div role="group" style="margin-top:16px">
+    {% if file['status'] == 'failed' %}
+    <button hx-post="/ui/api/retry" hx-vals='{"path": "{{ file['path'] }}"}' hx-target="#file-detail" hx-swap="outerHTML" class="outline">Retry</button>
+    {% endif %}
+    {% if file['status'] == 'pending' %}
+    <button hx-post="/ui/api/skip" hx-vals='{"path": "{{ file['path'] }}"}' hx-target="#file-detail" hx-swap="outerHTML" class="outline secondary">Skip</button>
+    {% endif %}
+    {% if file['status'] in ('completed', 'skipped') %}
+    <button hx-post="/ui/api/reencode" hx-vals='{"path": "{{ file['path'] }}"}' hx-target="#file-detail" hx-swap="outerHTML" hx-confirm="Re-encode this file?" class="outline">Re-encode</button>
+    {% endif %}
+  </div>
+</article>
+{% endblock %}

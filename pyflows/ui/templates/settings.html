@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Settings{% endblock %}
+{% block content %}
+<h2>Settings <small class="muted">(read-only)</small></h2>
+
+<article>
+  <header><strong>General</strong></header>
+  <dl>
+    <dt>Mode</dt><dd>{{ config.general.mode }}</dd>
+    <dt>Workers</dt><dd>{{ config.general.workers }}</dd>
+    <dt>DB Path</dt><dd><code>{{ config.general.db_path }}</code></dd>
+    <dt>Temp Dir</dt><dd><code>{{ config.general.temp_dir }}</code></dd>
+    <dt>VAAPI Device</dt><dd><code>{{ config.general.vaapi_device }}</code></dd>
+    <dt>Log Level</dt><dd>{{ config.general.log_level }}</dd>
+    <dt>Stall Timeout</dt><dd>{{ config.general.stall_timeout }}s</dd>
+    <dt>Max Retries</dt><dd>{{ config.general.max_retries }}</dd>
+    <dt>Retry Backoff</dt><dd>{{ config.general.retry_backoff_seconds }}s</dd>
+    <dt>FFmpeg</dt><dd><code>{{ config.general.ffmpeg_path }}</code></dd>
+    <dt>FFprobe</dt><dd><code>{{ config.general.ffprobe_path }}</code></dd>
+    <dt>Metrics Port</dt><dd>{{ config.general.metrics_port }}</dd>
+  </dl>
+</article>
+
+<h3>Profiles</h3>
+{% for name, profile in config.profiles.items() %}
+<article>
+  <header><strong>{{ name }}</strong></header>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div>
+      <h5>Video</h5>
+      <dl>
+        <dt>Codec</dt><dd>{{ profile.video.codec }}</dd>
+        <dt>Encoder</dt><dd>{{ profile.video.encoder }}</dd>
+        <dt>Quality</dt><dd>{{ profile.video.quality }}</dd>
+        <dt>Bit Depth</dt><dd>{{ profile.video.bit_depth }}</dd>
+        <dt>Fallback</dt><dd>{{ profile.video.fallback }}</dd>
+        <dt>HDR Policy</dt><dd>{{ profile.video.hdr_policy }}</dd>
+        {% if profile.video.skip_codecs %}<dt>Skip Codecs</dt><dd>{{ profile.video.skip_codecs|join(', ') }}</dd>{% endif %}
+      </dl>
+    </div>
+    <div>
+      <h5>Audio</h5>
+      <dl>
+        <dt>Languages</dt><dd>{{ profile.audio.keep_languages|join(', ') or 'all' }}</dd>
+        <dt>Default</dt><dd>{{ profile.audio.default_language }}</dd>
+        <dt>Remove Commentary</dt><dd>{{ profile.audio.remove_commentary }}</dd>
+        <dt>Preserve Surround</dt><dd>{{ profile.audio.preserve_surround }}</dd>
+        <dt>Stereo Codec</dt><dd>{{ profile.audio.add_stereo.codec }} {{ profile.audio.add_stereo.bitrate }}k</dd>
+      </dl>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div>
+      <h5>Subtitles</h5>
+      <dl>
+        <dt>Languages</dt><dd>{{ profile.subtitles.keep_languages|join(', ') or 'all' }}</dd>
+        {% if profile.subtitles.remove_formats %}<dt>Remove Formats</dt><dd>{{ profile.subtitles.remove_formats|join(', ') }}</dd>{% endif %}
+        <dt>Remove Commentary</dt><dd>{{ profile.subtitles.remove_commentary }}</dd>
+      </dl>
+    </div>
+    <div>
+      <h5>Output</h5>
+      <dl>
+        <dt>Container</dt><dd>{{ profile.output.container }}</dd>
+        <dt>Replace Original</dt><dd>{{ profile.output.replace_original }}</dd>
+      </dl>
+    </div>
+  </div>
+</article>
+{% endfor %}
+
+<h3>Libraries</h3>
+{% for lib in config.libraries %}
+<article>
+  <dl>
+    <dt>{{ lib.name }}</dt><dd><code>{{ lib.path }}</code></dd>
+    <dt>Profile</dt><dd>{{ lib.profile }}</dd>
+    <dt>Scan Interval</dt><dd>{{ lib.scan_interval }}s</dd>
+    <dt>Extensions</dt><dd>{{ lib.extensions|join(', ') }}</dd>
+  </dl>
+</article>
+{% endfor %}
+
+<h3>Hardware</h3>
+<article>
+  <dl>
+    <dt>VAAPI Device Name</dt><dd>{{ config.hardware.vaapi.device }}</dd>
+    <dt>HW Decode Codecs</dt><dd>{{ config.hardware.vaapi.hw_decode_codecs|join(', ') }}</dd>
+    <dt>Upload Filter</dt><dd><code>{{ config.hardware.vaapi.upload_filter }}</code></dd>
+    <dt>Async Depth</dt><dd>{{ config.hardware.vaapi.async_depth }}</dd>
+    {% for key, val in config.hardware.env.items() %}
+    <dt>{{ key }}</dt><dd>{{ val }}</dd>
+    {% endfor %}
+  </dl>
+</article>
+
+{% if config.webhook %}
+<h3>Webhook</h3>
+<article>
+  <dl>
+    <dt>Enabled</dt><dd>{{ config.webhook.enabled }}</dd>
+    <dt>Port</dt><dd>{{ config.webhook.port }}</dd>
+    <dt>API Key</dt><dd>{% if config.webhook.api_key %}{{ config.webhook.api_key[:4] }}****{% else %}not set{% endif %}</dd>
+  </dl>
+</article>
+{% endif %}
+{% endblock %}

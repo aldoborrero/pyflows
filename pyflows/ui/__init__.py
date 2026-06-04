@@ -175,6 +175,46 @@ class UIRenderer:
         tmpl = self.env.get_template("partials/history_table.html")
         return tmpl.render(files=files)
 
+    def render_libraries(self) -> str:
+        with FileDB(self.config.general.db_path) as db:
+            raw_stats = db.status_counts_by_library()
+            for lib_stat in raw_stats:
+                lib_stat["last_scan"] = db.get_last_scan(str(lib_stat["library"]))
+                for lib_cfg in self.config.libraries:
+                    if lib_cfg.name == lib_stat["library"]:
+                        lib_stat["profile"] = lib_cfg.profile
+                        lib_stat["config_path"] = lib_cfg.path
+                        break
+        total_files = sum(s["completed"] + s["pending"] + s["failed"] + s["skipped"] + s["processing"] for s in raw_stats)
+        total_completed = sum(s["completed"] for s in raw_stats)
+        total_saved = sum(s["saved"] for s in raw_stats)
+        tmpl = self.env.get_template("libraries.html")
+        return tmpl.render(library_stats=raw_stats, total_files=total_files,
+                           total_completed=total_completed, total_saved=total_saved,
+                           active="libraries")
+
+    def render_settings(self) -> str:
+        tmpl = self.env.get_template("settings.html")
+        return tmpl.render(config=self.config, active="settings")
+
+    def render_file_detail(self, file_id: int) -> str | None:
+        with FileDB(self.config.general.db_path) as db:
+            file = db.get_by_id(file_id)
+        if file is None:
+            return None
+        progress = get_current_progress()
+        tmpl = self.env.get_template("file_detail.html")
+        return tmpl.render(file=file, file_id=file_id, progress=progress)
+
+    def render_file_detail_partial(self, file_id: int) -> str | None:
+        with FileDB(self.config.general.db_path) as db:
+            file = db.get_by_id(file_id)
+        if file is None:
+            return None
+        progress = get_current_progress()
+        tmpl = self.env.get_template("partials/file_detail_card.html")
+        return tmpl.render(file=file, file_id=file_id, progress=progress)
+
     def serve_static(self, filename: str) -> tuple[bytes, str] | None:
         static_dir = Path(__file__).parent / "static"
         safe_name = Path(filename).name
