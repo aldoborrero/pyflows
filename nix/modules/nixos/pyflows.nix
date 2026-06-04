@@ -50,10 +50,22 @@ in
       '';
     };
 
+    extraGroups = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "render" "video" ];
+      description = "Extra groups for GPU access (render, video).";
+    };
+
     environmentFile = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;
       description = "Environment file for secrets (e.g. webhook tokens).";
+    };
+
+    openFirewall = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Open firewall ports for webhook and metrics.";
     };
   };
 
@@ -63,6 +75,7 @@ in
       group = cfg.group;
       home = cfg.dataDir;
       createHome = true;
+      extraGroups = cfg.extraGroups;
     };
 
     users.groups.${cfg.group} = { };
@@ -82,10 +95,13 @@ in
         Restart = "on-failure";
         RestartSec = 30;
 
+        TimeoutStopSec = 3600;
+        DeviceAllow = [ "/dev/dri/renderD128 rw" ];
+
         # Hardening
         NoNewPrivileges = true;
         ProtectSystem = "strict";
-        ProtectHome = true;
+        ProtectHome = "read-only";
         PrivateTmp = true;
         ReadWritePaths = [ cfg.dataDir ]
           ++ lib.optionals (cfg.settings ? general && cfg.settings.general ? temp_dir) [ cfg.settings.general.temp_dir ]
@@ -95,5 +111,10 @@ in
         EnvironmentFile = cfg.environmentFile;
       };
     };
+
+    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall (
+      lib.optionals (cfg.settings ? webhook && cfg.settings.webhook ? port) [ cfg.settings.webhook.port ]
+      ++ lib.optionals (cfg.settings ? general && cfg.settings.general ? metrics_port) [ cfg.settings.general.metrics_port ]
+    );
   };
 }
