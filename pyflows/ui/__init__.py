@@ -68,7 +68,7 @@ class UIRenderer:
         return tmpl.render(
             counts=counts, saved=saved, pending=pending,
             failed=failed, history=history, progress=progress,
-            processing=processing,
+            processing=processing, active="dashboard",
         )
 
     def render_partial_status_bar(self) -> str:
@@ -104,6 +104,76 @@ class UIRenderer:
             history = db.get_history(limit=10)
         tmpl = self.env.get_template("partials/recent_completions.html")
         return tmpl.render(history=history)
+
+    def render_queue(self, filter_val: str = "", query: str = "", library: str = "") -> str:
+        with FileDB(self.config.general.db_path) as db:
+            kwargs: dict[str, object] = {}
+            if filter_val == "pending":
+                kwargs["status"] = "pending"
+            elif filter_val == "processing":
+                kwargs["status"] = "processing"
+            elif filter_val == "on_hold":
+                kwargs["has_hold"] = True
+            elif filter_val == "retry":
+                kwargs["has_retry"] = True
+            else:
+                kwargs["status"] = "pending"
+            if query:
+                kwargs["query"] = query
+            if library:
+                kwargs["library"] = library
+            files = db.search_files(**kwargs)
+            libraries = db.get_libraries()
+        tmpl = self.env.get_template("queue.html")
+        return tmpl.render(files=files, libraries=libraries, filter=filter_val,
+                           query=query, library=library, active="queue")
+
+    def render_queue_partial(self, filter_val: str = "", query: str = "",
+                             library: str = "", offset: int = 0) -> str:
+        with FileDB(self.config.general.db_path) as db:
+            kwargs: dict[str, object] = {"offset": offset}
+            if filter_val == "pending":
+                kwargs["status"] = "pending"
+            elif filter_val == "processing":
+                kwargs["status"] = "processing"
+            elif filter_val == "on_hold":
+                kwargs["has_hold"] = True
+            elif filter_val == "retry":
+                kwargs["has_retry"] = True
+            if query:
+                kwargs["query"] = query
+            if library:
+                kwargs["library"] = library
+            files = db.search_files(**kwargs)
+        tmpl = self.env.get_template("partials/queue_table.html")
+        return tmpl.render(files=files)
+
+    def render_history(self, status_filter: str = "", library_filter: str = "") -> str:
+        with FileDB(self.config.general.db_path) as db:
+            files = db.search_history(
+                status=status_filter or None,
+                library=library_filter or None,
+            )
+            stats = db.history_stats(
+                status=status_filter or None,
+                library=library_filter or None,
+            )
+            libraries = db.get_libraries()
+        tmpl = self.env.get_template("history.html")
+        return tmpl.render(files=files, stats=stats, libraries=libraries,
+                           status_filter=status_filter, library_filter=library_filter,
+                           active="history")
+
+    def render_history_partial(self, status_filter: str = "", library_filter: str = "",
+                               offset: int = 0) -> str:
+        with FileDB(self.config.general.db_path) as db:
+            files = db.search_history(
+                status=status_filter or None,
+                library=library_filter or None,
+                offset=offset,
+            )
+        tmpl = self.env.get_template("partials/history_table.html")
+        return tmpl.render(files=files)
 
     def serve_static(self, filename: str) -> tuple[bytes, str] | None:
         static_dir = Path(__file__).parent / "static"

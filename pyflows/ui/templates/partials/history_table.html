@@ -1,0 +1,30 @@
+{% for f in files %}
+<tr>
+  <td><span class="badge badge-{{ f['status'] }}">{{ f['status'] }}</span></td>
+  <td title="{{ f['path'] }}"><a href="/ui/files/{{ f['rowid'] }}">{{ f['path'].split('/')[-1]|truncate(45) }}</a></td>
+  <td>{{ f['library'] }}</td>
+  <td>
+    {% if f['status'] == 'completed' %}
+    {{ f['video_codec'] or '?' }} &rarr; {{ f['output_codec'] or '?' }}
+    {% elif f['status'] == 'failed' %}
+    <details><summary>{{ (f['error'] or '')|truncate(40) }}</summary>{{ f['error'] }}</details>
+    {% else %}—{% endif %}
+  </td>
+  <td>
+    {% if f['status'] == 'completed' and f['output_size'] %}
+      {% set delta = f['size'] - f['output_size'] %}
+      {% if delta > 0 %}
+      <span class="saved-positive">-{{ delta|human_size }}</span>
+      {% else %}
+      <span class="saved-negative">+{{ (-delta)|human_size }}</span>
+      {% endif %}
+    {% else %}—{% endif %}
+  </td>
+  <td>{{ f['completed_at']|relative_time }}</td>
+  <td>
+    {% if f['status'] == 'failed' %}
+    <button hx-post="/ui/api/retry" hx-vals='{"path": "{{ f['path'] }}"}' hx-target="closest tr" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Retry</button>
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}

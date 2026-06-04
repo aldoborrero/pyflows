@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Queue{% endblock %}
+{% block content %}
+<h2>Queue</h2>
+
+<div role="group">
+  <a href="/ui/queue" class="{% if not filter %}active{% endif %}" role="button" class="outline">All</a>
+  <a href="/ui/queue?filter=pending" class="{% if filter == 'pending' %}active{% endif %}" role="button" class="outline">Pending</a>
+  <a href="/ui/queue?filter=processing" class="{% if filter == 'processing' %}active{% endif %}" role="button" class="outline">Processing</a>
+  <a href="/ui/queue?filter=on_hold" class="{% if filter == 'on_hold' %}active{% endif %}" role="button" class="outline">On Hold</a>
+  <a href="/ui/queue?filter=retry" class="{% if filter == 'retry' %}active{% endif %}" role="button" class="outline">Retry</a>
+</div>
+
+<div style="display:flex;gap:8px;margin-bottom:16px">
+  <input type="search" name="q" placeholder="Search files..." value="{{ query or '' }}"
+         hx-get="/ui/partials/queue-table" hx-target="#queue-tbody" hx-swap="innerHTML"
+         hx-trigger="keyup changed delay:300ms" hx-include="[name=library],[name=filter_val]"
+         style="flex:1">
+  <select name="library" hx-get="/ui/partials/queue-table" hx-target="#queue-tbody"
+          hx-swap="innerHTML" hx-include="[name=q],[name=filter_val]">
+    <option value="">All libraries</option>
+    {% for lib in libraries %}
+    <option value="{{ lib }}" {% if library == lib %}selected{% endif %}>{{ lib }}</option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="filter_val" value="{{ filter or '' }}">
+</div>
+
+<figure>
+  <table role="grid">
+    <thead>
+      <tr><th>File</th><th>Library</th><th>Codec</th><th>Size</th><th>Queued</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody id="queue-tbody">
+      {% include "partials/queue_table.html" %}
+    </tbody>
+  </table>
+</figure>
+
+{% if files|length >= 50 %}
+<button hx-get="/ui/partials/queue-table?offset=50{% if filter %}&filter_val={{ filter }}{% endif %}"
+        hx-target="#queue-tbody" hx-swap="beforeend">Load more</button>
+{% endif %}
+{% endblock %}

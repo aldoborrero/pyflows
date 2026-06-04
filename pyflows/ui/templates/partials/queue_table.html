@@ -1,0 +1,19 @@
+{% for f in files %}
+<tr>
+  <td title="{{ f['path'] }}"><a href="/ui/files/{{ f['rowid'] }}">{{ f['path'].split('/')[-1]|truncate(45) }}</a></td>
+  <td>{{ f['library'] }}</td>
+  <td>{{ f['video_codec'] or '—' }}</td>
+  <td>{{ f['size']|human_size }}</td>
+  <td>{{ f['created_at']|relative_time }}</td>
+  <td>
+    <span class="badge badge-{{ f['status'] }}">{{ f['status'] }}</span>
+    {% if f['hold_until'] %}<small class="muted">hold until {{ f['hold_until']|relative_time }}</small>{% endif %}
+    {% if f['next_retry_at'] %}<small class="muted">retry {{ f['next_retry_at']|relative_time }}</small>{% endif %}
+  </td>
+  <td>
+    {% if f['status'] == 'pending' %}
+    <button hx-post="/ui/api/skip" hx-vals='{"path": "{{ f['path'] }}"}' hx-target="closest tr" hx-swap="delete" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Skip</button>
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}

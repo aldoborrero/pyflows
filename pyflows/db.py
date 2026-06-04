@@ -354,6 +354,98 @@ class FileDB:
         row = cur.fetchone()
         return row[0] if row else None
 
+    def search_files(
+        self,
+        status: str | None = None,
+        library: str | None = None,
+        query: str | None = None,
+        has_hold: bool | None = None,
+        has_retry: bool | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[sqlite3.Row]:
+        conditions = []
+        params: list[object] = []
+        if status:
+            conditions.append("status=?")
+            params.append(status)
+        if library:
+            conditions.append("library=?")
+            params.append(library)
+        if query:
+            conditions.append("path LIKE ?")
+            params.append(f"%{query}%")
+        if has_hold is True:
+            conditions.append("hold_until IS NOT NULL AND hold_until != ''")
+        if has_retry is True:
+            conditions.append("next_retry_at IS NOT NULL AND next_retry_at != ''")
+        where = " AND ".join(conditions) if conditions else "1=1"
+        sql = f"SELECT rowid, * FROM files WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        return self.conn.execute(sql, params).fetchall()
+
+    def search_history(
+        self,
+        status: str | None = None,
+        library: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[sqlite3.Row]:
+        conditions = ["status IN ('completed', 'failed', 'skipped')"]
+        params: list[object] = []
+        if status:
+            conditions.append("status=?")
+            params.append(status)
+        if library:
+            conditions.append("library=?")
+            params.append(library)
+        where = " AND ".join(conditions)
+        sql = f"SELECT rowid, * FROM files WHERE {where} ORDER BY completed_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        return self.conn.execute(sql, params).fetchall()
+
+    def history_stats(self, status: str | None = None, library: str | None = None) -> dict[str, object]:
+        conditions = ["status IN ('completed', 'failed', 'skipped')"]
+        params: list[object] = []
+        if status:
+            conditions.append("status=?")
+            params.append(status)
+        if library:
+            conditions.append("library=?")
+            params.append(library)
+        where = " AND ".join(conditions)
+        row = self.conn.execute(
+            f"SELECT count(*) as total, "
+            f"sum(case when status='completed' then 1 else 0 end) as completed, "
+            f"sum(case when status='failed' then 1 else 0 end) as failed, "
+            f"coalesce(sum(case when status='completed' and output_size is not null then size - output_size else 0 end), 0) as saved "
+            f"FROM files WHERE {where}", params
+        ).fetchone()
+        total = row[0] or 0
+        completed = row[1] or 0
+        failed = row[2] or 0
+        return {
+            "total": total,
+            "completed": completed,
+            "failed": failed,
+            "skipped": total - completed - failed,
+            "success_rate": round(completed / max(completed + failed, 1) * 100, 1),
+            "saved": row[3] or 0,
+        }
+
+    def skip_file(self, path: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, completed_at=? WHERE path=? AND status=?",
+            (FileStatus.SKIPPED, datetime.now(timezone.utc).isoformat(), path, FileStatus.PENDING),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def get_libraries(self) -> list[str]:
+        return [row[0] for row in self.conn.execute(
+            "SELECT DISTINCT library FROM files WHERE library IS NOT NULL ORDER BY library"
+        )]
+
     def should_scan_library(self, library: str, interval_seconds: int) -> bool:
         """Return True when a library scan is due based on its last scan timestamp."""
         if interval_seconds <= 0:

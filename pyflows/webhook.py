@@ -68,6 +68,8 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._handle_ui_retry(body)
         elif self.path == "/ui/api/retry-all":
             self._handle_ui_retry_all()
+        elif self.path == "/ui/api/skip":
+            self._handle_ui_skip(body)
         else:
             self._respond(404, {"error": "not found"})
 
@@ -78,8 +80,16 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._check_ready()
         elif self.path == "/ui" or self.path == "/ui/":
             self._serve_ui_page("dashboard")
+        elif self.path.startswith("/ui/queue"):
+            self._serve_ui_page("queue")
+        elif self.path.startswith("/ui/history"):
+            self._serve_ui_page("history")
         elif self.path == "/ui/events":
             self._serve_sse()
+        elif self.path.startswith("/ui/partials/queue-table"):
+            self._serve_ui_partial("queue-table")
+        elif self.path.startswith("/ui/partials/history-table"):
+            self._serve_ui_partial("history-table")
         elif self.path.startswith("/ui/static/"):
             self._serve_static()
         else:
@@ -201,12 +211,60 @@ class _WebhookHandler(BaseHTTPRequestHandler):
         if self.ui_renderer is None:
             self._respond(404, {"error": "UI not enabled"})
             return
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         if page == "dashboard":
             html = self.ui_renderer.render_dashboard()
+        elif page == "queue":
+            html = self.ui_renderer.render_queue(
+                filter_val=params.get("filter", [""])[0],
+                query=params.get("q", [""])[0],
+                library=params.get("library", [""])[0],
+            )
+        elif page == "history":
+            html = self.ui_renderer.render_history(
+                status_filter=params.get("status", [""])[0],
+                library_filter=params.get("library", [""])[0],
+            )
         else:
             self._respond(404, {"error": "not found"})
             return
         self._respond_html(200, html)
+
+    def _serve_ui_partial(self, partial: str) -> None:
+        if self.ui_renderer is None:
+            self._respond(404, {"error": "UI not enabled"})
+            return
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        offset = int(params.get("offset", ["0"])[0])
+        if partial == "queue-table":
+            html = self.ui_renderer.render_queue_partial(
+                filter_val=params.get("filter_val", [""])[0],
+                query=params.get("q", [""])[0],
+                library=params.get("library", [""])[0],
+                offset=offset,
+            )
+        elif partial == "history-table":
+            html = self.ui_renderer.render_history_partial(
+                status_filter=params.get("status_val", [""])[0],
+                library_filter=params.get("library", [""])[0],
+                offset=offset,
+            )
+        else:
+            self._respond(404, {"error": "not found"})
+            return
+        self._respond_html(200, html)
+
+    def _handle_ui_skip(self, body: bytes) -> None:
+        params = urllib.parse.parse_qs(body.decode())
+        path = params.get("path", [""])[0]
+        if not path:
+            self._respond(400, {"error": "missing path"})
+            return
+        with FileDB(self.config.general.db_path) as db:
+            if db.skip_file(path):
+                self._respond_html(200, "")
+            else:
+                self._respond(404, {"error": "not found or not pending"})
 
     def _serve_static(self) -> None:
         if self.ui_renderer is None:
