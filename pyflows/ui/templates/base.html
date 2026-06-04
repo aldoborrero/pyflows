@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pyflows{% block title_suffix %}{% endblock %}</title>
+  <link rel="stylesheet" href="/ui/static/pico.min.css">
+  <link rel="stylesheet" href="/ui/static/styles.css">
+  <script src="/ui/static/htmx.min.js"></script>
+  <script src="/ui/static/htmx-sse.min.js"></script>
+</head>
+<body>
+  <nav class="container-fluid">
+    <ul>
+      <li><strong>pyflows</strong></li>
+    </ul>
+    <ul>
+      <li><a href="/ui/"{% if active == 'dashboard' %} class="active"{% endif %}>Dashboard</a></li>
+      <li><a href="/ui/libraries"{% if active == 'libraries' %} class="active"{% endif %}>Libraries</a></li>
+      <li><a href="/ui/settings"{% if active == 'settings' %} class="active"{% endif %}>Settings</a></li>
+    </ul>
+  </nav>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="container">
+    <small>pyflows monitoring UI</small>
+  </footer>
+</body>
+</html>

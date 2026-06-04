@@ -315,6 +315,45 @@ class FileDB:
         )
         return cur.fetchall()
 
+    def all_status_counts(self) -> dict[str, int]:
+        counts = {s.value: 0 for s in FileStatus}
+        for row in self.conn.execute("SELECT status, count(*) FROM files GROUP BY status"):
+            counts[row[0]] = row[1]
+        return counts
+
+    def aggregate_space_saved(self) -> int:
+        row = self.conn.execute(
+            "SELECT coalesce(sum(size - output_size), 0) FROM files WHERE status=? AND output_size IS NOT NULL",
+            (FileStatus.COMPLETED,),
+        ).fetchone()
+        return row[0]
+
+    def status_counts_by_library(self) -> list[dict[str, object]]:
+        rows = self.conn.execute(
+            "SELECT library, status, count(*) as cnt, "
+            "coalesce(sum(size), 0) as total_size, "
+            "coalesce(sum(case when status='completed' and output_size is not null then size - output_size else 0 end), 0) as saved "
+            "FROM files WHERE library IS NOT NULL GROUP BY library, status"
+        ).fetchall()
+        libs: dict[str, dict[str, object]] = {}
+        for row in rows:
+            lib = str(row[0])
+            if lib not in libs:
+                libs[lib] = {"library": lib, "pending": 0, "processing": 0, "completed": 0, "failed": 0, "skipped": 0, "total_size": 0, "saved": 0}
+            libs[lib][row[1]] = row[2]
+            libs[lib]["total_size"] = int(libs[lib]["total_size"]) + row[3]
+            libs[lib]["saved"] = int(libs[lib]["saved"]) + row[4]
+        return list(libs.values())
+
+    def get_by_id(self, file_id: int) -> sqlite3.Row | None:
+        cur = self.conn.execute("SELECT rowid, * FROM files WHERE rowid=?", (file_id,))
+        return cur.fetchone()
+
+    def get_last_scan(self, library: str) -> str | None:
+        cur = self.conn.execute("SELECT last_scan_at FROM library_scans WHERE library=?", (library,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
     def should_scan_library(self, library: str, interval_seconds: int) -> bool:
         """Return True when a library scan is due based on its last scan timestamp."""
         if interval_seconds <= 0:

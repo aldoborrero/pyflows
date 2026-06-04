@@ -1,0 +1,13 @@
+<article>
+  <header>Current Encode</header>
+  {% if progress.file_path %}
+  <p><strong>{{ progress.file_path.split('/')[-1] }}</strong></p>
+  {% if processing %}
+  <p class="muted">{{ processing['library'] }} &middot; {{ processing['video_codec'] or '?' }} &rarr; {{ processing['profile'] }}</p>
+  {% endif %}
+  <progress value="{{ progress.out_time_us }}" max="{{ progress.out_time_us + 1 }}"></progress>
+  <p>Speed: <strong>{{ "%.1f"|format(progress.speed) }}x</strong></p>
+  {% else %}
+  <p class="muted">No active encode</p>
+  {% endif %}
+</article>

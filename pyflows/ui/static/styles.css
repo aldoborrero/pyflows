@@ -1,0 +1,40 @@
+/* Status badges */
+.badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.85em;
+  font-weight: 600;
+  margin-right: 8px;
+  margin-bottom: 8px;
+}
+.badge-pending { background: var(--pico-primary-background); color: var(--pico-primary-inverse); }
+.badge-processing { background: #f0ad4e; color: #000; }
+.badge-completed { background: #5cb85c; color: #fff; }
+.badge-failed { background: #d9534f; color: #fff; }
+.badge-skipped { background: var(--pico-muted-border-color); color: var(--pico-muted-color); }
+.badge-saved { background: #5cb85c; color: #fff; }
+
+/* Space saved indicators */
+.saved-positive { color: #5cb85c; font-weight: 600; }
+.saved-negative { color: #d9534f; font-weight: 600; }
+
+/* Muted text */
+.muted { color: var(--pico-muted-color); }
+
+/* Compact tables */
+table { font-size: 0.9em; }
+table td, table th { padding: 8px 12px; }
+
+/* Active nav link */
+nav a.active { text-decoration: underline; font-weight: 600; }
+
+/* Progress bar in encode card */
+article progress { width: 100%; margin: 8px 0; }
+
+/* Inline action buttons */
+table button { margin: 0; }
+
+/* Error details */
+details summary { cursor: pointer; color: var(--pico-muted-color); }
+details[open] summary { color: var(--pico-color); }

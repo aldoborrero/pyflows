@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Dashboard{% endblock %}
+{% block content %}
+<div hx-ext="sse" sse-connect="/ui/events">
+
+  <div id="status-bar" sse-swap="status-counts" hx-swap="innerHTML">
+    {% include "partials/status_bar.html" %}
+  </div>
+
+  <div id="encode-card" sse-swap="encode-progress" hx-swap="innerHTML">
+    {% include "partials/encode_progress.html" %}
+  </div>
+
+  <div id="queue-preview" sse-swap="queue-summary" hx-swap="innerHTML">
+    {% include "partials/queue_preview.html" %}
+  </div>
+
+  <div id="failed-table" sse-swap="failed-update" hx-swap="innerHTML">
+    {% include "partials/failed_table.html" %}
+  </div>
+
+  <div id="recent-completions" sse-swap="completions-update" hx-swap="innerHTML">
+    {% include "partials/recent_completions.html" %}
+  </div>
+
+</div>
+{% endblock %}

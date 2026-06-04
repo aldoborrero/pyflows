@@ -1,0 +1,36 @@
+<article>
+  <header>Recent Completions</header>
+  {% if history %}
+  <figure>
+    <table role="grid">
+      <thead>
+        <tr><th>File</th><th>Library</th><th>Codec</th><th>Saved</th><th>When</th></tr>
+      </thead>
+      <tbody>
+        {% for f in history %}
+        {% if f['status'] == 'completed' %}
+        <tr>
+          <td title="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(40) }}</td>
+          <td>{{ f['library'] }}</td>
+          <td>{{ f['video_codec'] or '?' }} &rarr; {{ f['output_codec'] or '?' }}</td>
+          <td>
+            {% if f['output_size'] %}
+              {% set delta = f['size'] - f['output_size'] %}
+              {% if delta > 0 %}
+              <span class="saved-positive">-{{ delta|human_size }}</span>
+              {% else %}
+              <span class="saved-negative">+{{ (-delta)|human_size }}</span>
+              {% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td>{{ f['completed_at']|relative_time }}</td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </figure>
+  {% else %}
+  <p class="muted">No completed encodes yet</p>
+  {% endif %}
+</article>

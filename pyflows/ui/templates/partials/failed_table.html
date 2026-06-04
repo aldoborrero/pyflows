@@ -1,0 +1,26 @@
+{% if failed %}
+<article>
+  <header>
+    Failed ({{ failed|length }})
+    <button hx-post="/ui/api/retry-all" hx-target="#failed-table" hx-swap="innerHTML" hx-confirm="Retry all failed files?" class="outline secondary" style="float:right;padding:4px 12px;font-size:0.85em">Retry All</button>
+  </header>
+  <figure>
+    <table role="grid">
+      <thead>
+        <tr><th>File</th><th>Library</th><th>Error</th><th>When</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for f in failed %}
+        <tr>
+          <td title="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(40) }}</td>
+          <td>{{ f['library'] }}</td>
+          <td><details><summary>{{ f['error']|truncate(50) }}</summary>{{ f['error'] }}</details></td>
+          <td>{{ f['completed_at']|relative_time }}</td>
+          <td><button hx-post="/ui/api/retry" hx-vals='{"path": "{{ f['path'] }}"}' hx-target="closest tr" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Retry</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </figure>
+</article>
+{% endif %}
