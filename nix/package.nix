@@ -30,6 +30,7 @@ python313.pkgs.buildPythonApplication {
     watchdog
     rich
     prometheus-client
+    jinja2
   ];
 
   nativeBuildInputs = [ makeWrapper ];
