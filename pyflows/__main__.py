@@ -73,12 +73,12 @@ def run(config_path: Path | None) -> None:
     configure_logging(config)
     from pyflows.metrics import start_metrics_server
     try:
-        start_metrics_server(config.general.metrics_port, config.general.db_path)
+        metrics_stop = start_metrics_server(config.general.metrics_port, config.general.db_path)
     except OSError as e:
         log.error("Failed to start metrics server on port %d: %s", config.general.metrics_port, e)
         sys.exit(1)
     from pyflows.tasks import start_daemon
-    start_daemon(config)
+    start_daemon(config, metrics_stop=metrics_stop)
 
 
 @main.command()
@@ -149,6 +149,12 @@ def status(config_path: Path | None) -> None:
             table.add_row(f"[{color}]{s}[/{color}]", str(count))
 
     console.print(table)
+
+    from pyflows.ffmpeg import get_current_progress
+    progress = get_current_progress()
+    if progress.file_path:
+        console.print(f"\n[bold]Currently encoding:[/bold] {Path(progress.file_path).name}")
+        console.print(f"  Speed: {progress.speed:.1f}x")
 
 
 @main.command()
