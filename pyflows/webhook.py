@@ -3,13 +3,16 @@
 import json
 import logging
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import time
+import urllib.parse
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Callable
 
 from pyflows.config import PyflowsConfig, WebhookConfig
 from pyflows.db import FileDB
 from pyflows.logging_utils import log_event
+from pyflows.ui import UIRenderer
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +46,7 @@ class _WebhookHandler(BaseHTTPRequestHandler):
     config: PyflowsConfig
     webhook_config: WebhookConfig
     encode_task: Callable[[str, str], object]
+    ui_renderer: UIRenderer | None
 
     def do_POST(self) -> None:
         if self.webhook_config.api_key:
@@ -60,6 +64,10 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._handle_sonarr(body)
         elif self.path == "/webhook/radarr":
             self._handle_radarr(body)
+        elif self.path == "/ui/api/retry":
+            self._handle_ui_retry(body)
+        elif self.path == "/ui/api/retry-all":
+            self._handle_ui_retry_all()
         else:
             self._respond(404, {"error": "not found"})
 
@@ -68,6 +76,12 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._respond(200, {"status": "ok"})
         elif self.path == "/readyz":
             self._check_ready()
+        elif self.path == "/ui" or self.path == "/ui/":
+            self._serve_ui_page("dashboard")
+        elif self.path == "/ui/events":
+            self._serve_sse()
+        elif self.path.startswith("/ui/static/"):
+            self._serve_static()
         else:
             self._respond(404, {"error": "not found"})
 
@@ -183,6 +197,93 @@ class _WebhookHandler(BaseHTTPRequestHandler):
                   profile=profile, arr_id=arr_id)
         self._respond(200, {"status": "queued", "profile": profile})
 
+    def _serve_ui_page(self, page: str) -> None:
+        if self.ui_renderer is None:
+            self._respond(404, {"error": "UI not enabled"})
+            return
+        if page == "dashboard":
+            html = self.ui_renderer.render_dashboard()
+        else:
+            self._respond(404, {"error": "not found"})
+            return
+        self._respond_html(200, html)
+
+    def _serve_static(self) -> None:
+        if self.ui_renderer is None:
+            self._respond(404, {"error": "UI not enabled"})
+            return
+        filename = self.path.split("/ui/static/", 1)[-1]
+        result = self.ui_renderer.serve_static(filename)
+        if result is None:
+            self._respond(404, {"error": "not found"})
+            return
+        data, content_type = result
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _serve_sse(self) -> None:
+        if self.ui_renderer is None:
+            self._respond(404, {"error": "UI not enabled"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        tick = 0
+        try:
+            while True:
+                tick += 1
+                if tick % 1 == 0:  # every 2s
+                    html = self.ui_renderer.render_partial_encode_progress()
+                    self._send_sse_event("encode-progress", html)
+                if tick % 3 == 0:  # every 6s
+                    html = self.ui_renderer.render_partial_status_bar()
+                    self._send_sse_event("status-counts", html)
+                if tick % 5 == 0:  # every 10s
+                    self._send_sse_event("queue-summary", self.ui_renderer.render_partial_queue_preview())
+                    self._send_sse_event("failed-update", self.ui_renderer.render_partial_failed_table())
+                    self._send_sse_event("completions-update", self.ui_renderer.render_partial_recent_completions())
+                time.sleep(2)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _send_sse_event(self, event: str, data: str) -> None:
+        lines = data.replace("\n", " ").strip()
+        payload = f"event: {event}\ndata: {lines}\n\n"
+        self.wfile.write(payload.encode())
+        self.wfile.flush()
+
+    def _respond_html(self, code: int, html: str) -> None:
+        data = html.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_ui_retry(self, body: bytes) -> None:
+        params = urllib.parse.parse_qs(body.decode())
+        path = params.get("path", [""])[0]
+        if not path:
+            self._respond(400, {"error": "missing path"})
+            return
+        with FileDB(self.config.general.db_path) as db:
+            if db.retry_failed(path):
+                self._respond_html(200, "<tr><td colspan='5'>Retrying...</td></tr>")
+            else:
+                self._respond(404, {"error": "not found or not failed"})
+
+    def _handle_ui_retry_all(self) -> None:
+        with FileDB(self.config.general.db_path) as db:
+            count = db.retry_all_failed()
+        html = self.ui_renderer.render_partial_failed_table() if self.ui_renderer else ""
+        self._respond_html(200, html)
+
     def _respond(self, code: int, body: JsonResponse) -> None:
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -200,6 +301,7 @@ def start_webhook_server(config: PyflowsConfig, encode_task: Callable[[str, str]
         return None
 
     webhook_config = config.webhook
+    ui_renderer = UIRenderer(config)
 
     class Handler(_WebhookHandler):
         pass
@@ -207,12 +309,14 @@ def start_webhook_server(config: PyflowsConfig, encode_task: Callable[[str, str]
     Handler.config = config
     Handler.webhook_config = webhook_config
     Handler.encode_task = encode_task
+    Handler.ui_renderer = ui_renderer
 
-    server = HTTPServer(("0.0.0.0", webhook_config.port), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", webhook_config.port), Handler)
 
     thread = threading.Thread(target=server.serve_forever, daemon=True, name="webhook-server")
     thread.start()
 
     log_event(log, logging.INFO, "webhook_started",
-              "Webhook server started", port=webhook_config.port)
+              "Webhook server started", port=webhook_config.port,
+              ui_url=f"http://localhost:{webhook_config.port}/ui/")
     return server
