@@ -233,6 +233,7 @@ def encode_file(
     ffprobe_path: str = "ffprobe",
     hardware_config: HardwareConfig | None = None,
     stall_timeout: int = 300,
+    startup_timeout: int = 600,
 ) -> EncodeResult:
     """Run the full encode pipeline for a single file."""
     # Probe + plan
@@ -264,7 +265,7 @@ def encode_file(
         ffmpeg_path=ffmpeg_path,
         hardware_config=hardware_config,
     )
-    result = cmd.run(stall_timeout=stall_timeout)
+    result = cmd.run(stall_timeout=stall_timeout, startup_timeout=startup_timeout)
 
     if result.returncode != 0:
         fallback_mode = profile.video.fallback.lower()
@@ -288,7 +289,7 @@ def encode_file(
                 ffmpeg_path=ffmpeg_path,
                 hardware_config=hardware_config,
             )
-            result = cmd.run(stall_timeout=stall_timeout)
+            result = cmd.run(stall_timeout=stall_timeout, startup_timeout=startup_timeout)
 
             if result.returncode != 0:
                 Path(output_path).unlink(missing_ok=True)

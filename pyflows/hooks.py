@@ -17,6 +17,7 @@ def run_hooks(
     output_path: str = "",
     status: str = "",
     error: str = "",
+    timeout: int = 300,
 ) -> bool:
     if not commands:
         return True
@@ -31,7 +32,7 @@ def run_hooks(
     }
     for cmd in commands:
         try:
-            subprocess.run(cmd, shell=True, env=env, check=True, timeout=300)
+            subprocess.run(cmd, shell=True, env=env, check=True, timeout=timeout)
         except subprocess.CalledProcessError as exc:
             log_event(log, logging.WARNING, "hook_failed",
                       f"{phase} hook failed", command=cmd, returncode=exc.returncode)

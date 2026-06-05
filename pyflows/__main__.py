@@ -120,6 +120,7 @@ def encode(file_path: str, profile: str, config_path: Path | None) -> None:
         ffprobe_path=config.general.ffprobe_path,
         hardware_config=config.hardware,
         stall_timeout=config.general.stall_timeout,
+        startup_timeout=config.general.startup_timeout,
     )
     if result.status != EncodeStatus.FAILED:
         message = f"encoded -> {result.final_path}" if result.status == EncodeStatus.COMPLETED else "skipped"

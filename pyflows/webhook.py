@@ -55,7 +55,7 @@ class _WebhookHandler(BaseHTTPRequestHandler):
                 self._respond(401, {"error": "unauthorized"})
                 return
         content_length = int(self.headers.get("Content-Length", 0))
-        if content_length > 1_048_576:
+        if content_length > self.webhook_config.max_body_size:
             self._respond(413, {"error": "request too large"})
             return
         body = self.rfile.read(content_length)
@@ -451,7 +451,7 @@ def start_webhook_server(config: PyflowsConfig, encode_task: Callable[[str, str]
     Handler.encode_task = encode_task
     Handler.ui_renderer = ui_renderer
 
-    server = ThreadingHTTPServer(("0.0.0.0", webhook_config.port), Handler)
+    server = ThreadingHTTPServer((webhook_config.bind_address, webhook_config.port), Handler)
 
     thread = threading.Thread(target=server.serve_forever, daemon=True, name="webhook-server")
     thread.start()

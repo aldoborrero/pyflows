@@ -226,7 +226,8 @@ def _handle_encode_success(
     arr_source, arr_id = db.get_arr_metadata(final_path)
     notifier.on_success(final_path, arr_source=arr_source, arr_id=arr_id)
     run_hooks(config.hooks.post_encode, "post_encode", final_path,
-              profile=profile_name, output_path=final_path, status="completed")
+              profile=profile_name, output_path=final_path, status="completed",
+              timeout=config.hooks.timeout)
 
 
 def _handle_encode_failure(
@@ -260,7 +261,8 @@ def _handle_encode_failure(
         )
         notifier.on_failure(file_path, error)
         run_hooks(config.hooks.on_failure, "on_failure", file_path,
-                  profile=profile_name, status="failed", error=error)
+                  profile=profile_name, status="failed", error=error,
+                  timeout=config.hooks.timeout)
 
 
 def _do_encode(file_path: str, profile_name: str) -> None:
@@ -299,7 +301,7 @@ def _do_encode(file_path: str, profile_name: str) -> None:
         db.update_status(file_path, FileStatus.PROCESSING)
 
         if config.hooks.pre_encode:
-            if not run_hooks(config.hooks.pre_encode, "pre_encode", file_path, profile=profile_name):
+            if not run_hooks(config.hooks.pre_encode, "pre_encode", file_path, profile=profile_name, timeout=config.hooks.timeout):
                 db.update_status(file_path, FileStatus.FAILED, error="pre_encode hook failed")
                 return
 
@@ -313,6 +315,7 @@ def _do_encode(file_path: str, profile_name: str) -> None:
                 ffprobe_path=config.general.ffprobe_path,
                 hardware_config=config.hardware,
                 stall_timeout=config.general.stall_timeout,
+                startup_timeout=config.general.startup_timeout,
             )
         except Exception as exc:
             db.update_status(file_path, FileStatus.FAILED, error=str(exc))
@@ -326,7 +329,8 @@ def _do_encode(file_path: str, profile_name: str) -> None:
             log_event(log, logging.INFO, "encode_skipped", "Skipped file",
                       file_path=file_path, profile=profile_name)
             run_hooks(config.hooks.on_skip, "on_skip", file_path,
-                      profile=profile_name, status="skipped")
+                      profile=profile_name, status="skipped",
+                      timeout=config.hooks.timeout)
         elif result.status == EncodeStatus.COMPLETED:
             _handle_encode_success(db, file_path, result.final_path,
                                    profile_name, profile, notifier, config)

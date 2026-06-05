@@ -47,7 +47,8 @@ class GeneralConfig(BaseModel):
     ignore_suffixes: list[str] = [".part", ".tmp", ".partial", ".!qB"]
     max_retries: int = 3
     retry_backoff_seconds: int = 300
-    stall_timeout: int = 300  # Kill ffmpeg if no progress for this many seconds
+    stall_timeout: int = 300
+    startup_timeout: int = 600
     failed_retry_hours: int = 24
     metrics_port: int = 9327
 
@@ -115,7 +116,9 @@ class LibraryConfig(BaseModel):
 class WebhookConfig(BaseModel):
     enabled: bool = False
     port: int = 9328
+    bind_address: str = "0.0.0.0"
     api_key: str = ""
+    max_body_size: int = 1_048_576
     path_mappings: dict[str, str] = Field(default_factory=dict)
 
 
@@ -169,6 +172,7 @@ class HooksConfig(BaseModel):
     pre_encode: list[str] = Field(default_factory=list)
     post_encode: list[str] = Field(default_factory=list)
     on_failure: list[str] = Field(default_factory=list)
+    timeout: int = 300
     on_skip: list[str] = Field(default_factory=list)
 
 

@@ -222,7 +222,7 @@ class FFmpegCommand:
 
         return args
 
-    def run(self, stall_timeout: int = DEFAULT_STALL_TIMEOUT) -> subprocess.CompletedProcess[str]:
+    def run(self, stall_timeout: int = DEFAULT_STALL_TIMEOUT, startup_timeout: int = STARTUP_TIMEOUT) -> subprocess.CompletedProcess[str]:
         """Execute the ffmpeg command with stall detection.
 
         Uses ``-progress pipe:1`` to monitor ffmpeg's ``out_time_us`` output.
@@ -306,11 +306,11 @@ class FFmpegCommand:
                 with progress_lock:
                     if last_progress_time is None:
                         # No progress line received yet (ffmpeg still analyzing input).
-                        if time.monotonic() - start_time > STARTUP_TIMEOUT:
+                        if time.monotonic() - start_time > startup_timeout:
                             stalled.set()
                             log_event(log, logging.ERROR, "ffmpeg_startup_timeout",
                                       "ffmpeg never started producing progress — sending SIGTERM",
-                                      start_timeout=STARTUP_TIMEOUT)
+                                      start_timeout=startup_timeout)
                         else:
                             continue
                     else:
@@ -339,7 +339,7 @@ class FFmpegCommand:
                 stderr_file.seek(max(0, stderr_file.tell() - STDERR_TAIL_BYTES))
                 tail = stderr_file.read().decode("utf-8", errors="replace")
                 if last_progress_time is None:
-                    reason = f"[STARTUP TIMEOUT: no progress output for {STARTUP_TIMEOUT}s]"
+                    reason = f"[STARTUP TIMEOUT: no progress output for {startup_timeout}s]"
                 else:
                     reason = f"[STALL detected: no progress for {stall_timeout}s]"
                 with _active_proc_lock:
