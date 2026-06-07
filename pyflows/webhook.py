@@ -74,6 +74,10 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._handle_ui_reencode(body)
         elif self.path == "/ui/api/scan":
             self._handle_ui_scan(body)
+        elif self.path.startswith("/ui/api/pause/"):
+            self._handle_ui_pause(False)
+        elif self.path.startswith("/ui/api/resume/"):
+            self._handle_ui_pause(True)
         else:
             self._respond(404, {"error": "not found"})
 
@@ -340,6 +344,19 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             scan_library(lib, db, ffprobe_path=self.config.general.ffprobe_path,
                          priority_codecs=self.config.resolved_priority_codecs())
         self._respond_html(200, "<p>Scan complete</p>")
+
+    def _handle_ui_pause(self, enabled: bool) -> None:
+        from pyflows.tasks import set_pause_state, get_pause_state
+        prefix = "/ui/api/resume/" if enabled else "/ui/api/pause/"
+        component = self.path[len(prefix):]
+        if not set_pause_state(component, enabled):
+            self._respond(400, {"error": f"unknown component: {component}"})
+            return
+        state = get_pause_state()
+        if self.ui_renderer:
+            self._respond_html(200, self.ui_renderer.render_partial_pause_controls(state))
+        else:
+            self._respond(200, {"status": "ok", **{k: v for k, v in state.items()}})
 
     def _serve_static(self) -> None:
         if self.ui_renderer is None:

@@ -7,6 +7,8 @@
     {% include "partials/status_bar.html" %}
   </div>
 
+  {% include "partials/pause_controls.html" %}
+
   <div id="encode-card" sse-swap="encode-progress" hx-swap="innerHTML">
     {% include "partials/encode_progress.html" %}
   </div>

@@ -73,11 +73,13 @@ class UIRenderer:
         if progress.file_path:
             with FileDB(self.config.general.db_path) as db:
                 processing = db.get(progress.file_path)
+        from pyflows.tasks import get_pause_state
+        pause_state = get_pause_state()
         tmpl = self.env.get_template("dashboard.html")
         return tmpl.render(
             counts=counts, saved=saved, pending=pending,
             failed=failed, history=history, progress=progress,
-            processing=processing, active="dashboard",
+            processing=processing, pause_state=pause_state, active="dashboard",
         )
 
     def render_partial_status_bar(self) -> str:
@@ -113,6 +115,13 @@ class UIRenderer:
             history = db.get_history(limit=10)
         tmpl = self.env.get_template("partials/recent_completions.html")
         return tmpl.render(history=history)
+
+    def render_partial_pause_controls(self, state: dict[str, bool] | None = None) -> str:
+        if state is None:
+            from pyflows.tasks import get_pause_state
+            state = get_pause_state()
+        tmpl = self.env.get_template("partials/pause_controls.html")
+        return tmpl.render(pause_state=state)
 
     def render_queue(self, filter_val: str = "", query: str = "", library: str = "") -> str:
         with FileDB(self.config.general.db_path) as db:

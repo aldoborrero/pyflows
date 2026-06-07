@@ -35,6 +35,37 @@ EVERY_MINUTE = crontab(minute='*')
 # Task references (set by _register_tasks)
 _encode_task: Callable[..., Any] | None = None
 
+# Runtime pause controls (set = running, clear = paused)
+_scanning_enabled = threading.Event()
+_encoding_enabled = threading.Event()
+_watcher_enabled = threading.Event()
+_scanning_enabled.set()
+_encoding_enabled.set()
+_watcher_enabled.set()
+
+
+def get_pause_state() -> dict[str, bool]:
+    return {
+        "scanning": _scanning_enabled.is_set(),
+        "encoding": _encoding_enabled.is_set(),
+        "watcher": _watcher_enabled.is_set(),
+    }
+
+
+def set_pause_state(component: str, enabled: bool) -> bool:
+    events = {"scanning": _scanning_enabled, "encoding": _encoding_enabled, "watcher": _watcher_enabled}
+    ev = events.get(component)
+    if ev is None:
+        return False
+    if enabled:
+        ev.set()
+    else:
+        ev.clear()
+    log_event(log, logging.INFO, "pause_state_changed",
+              f"{'Resumed' if enabled else 'Paused'} {component}",
+              component=component, enabled=enabled)
+    return True
+
 _TRANSIENT_ERROR_MARKERS = (
     "insufficient disk space",
     "timed out",
@@ -118,6 +149,8 @@ def _scan_library_if_due(db: FileDB, lib: LibraryConfig, respect_schedule: bool)
 
 def _do_scan_all(respect_schedule: bool = False) -> None:
     """Scan all libraries and queue encode tasks for new/changed files."""
+    if not _scanning_enabled.is_set():
+        return
     config = _get_config()
     with FileDB(config.general.db_path) as db:
         for lib in config.libraries:
@@ -273,6 +306,10 @@ def _do_encode(file_path: str, profile_name: str) -> None:
     file and encodes the higher-priority one instead.  This lets existing Huey
     queue entries benefit from priority ordering even though Huey itself is FIFO.
     """
+    if not _encoding_enabled.is_set():
+        assert _encode_task is not None
+        _encode_task(file_path, profile_name)
+        return
     config = _get_config()
     if profile_name not in config.profiles:
         log_event(log, logging.ERROR, "unknown_profile", "Unknown profile", profile=profile_name)
@@ -369,6 +406,8 @@ class _MediaFileHandler(FileSystemEventHandler):  # type: ignore[misc]
 
     def _debounce(self, path: str) -> None:
         """Coalesce repeated file events before recording deferred processing state."""
+        if not _watcher_enabled.is_set():
+            return
         with self._lock:
             if path in self._timers:
                 self._timers[path].cancel()
