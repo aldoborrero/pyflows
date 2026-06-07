@@ -42,7 +42,8 @@ class Notifier:
 
     def _send_ntfy(self, title: str, body: str, priority: str = "default", tags: str = "") -> None:
         ntfy = self.config.ntfy
-        assert ntfy is not None
+        if ntfy is None:
+            return
         try:
             req = urllib.request.Request(
                 ntfy.url,
@@ -61,7 +62,8 @@ class Notifier:
 
     def _refresh_jellyfin(self, file_path: str) -> None:
         jf = self.config.jellyfin
-        assert jf is not None
+        if jf is None:
+            return
         try:
             url = f"{jf.url}/Library/Refresh"
             if jf.refresh_path:

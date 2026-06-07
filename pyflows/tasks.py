@@ -80,7 +80,8 @@ _TRANSIENT_ERROR_MARKERS = (
 
 def _get_config() -> PyflowsConfig:
     """Return the module-level config, raising if not initialized."""
-    assert _config is not None, "pyflows not initialized — call init_huey first"
+    if _config is None:
+        raise RuntimeError("pyflows not initialized — call init_huey first")
     return _config
 
 
@@ -97,7 +98,8 @@ def init_huey(config: PyflowsConfig) -> SqliteHuey:
 def _register_tasks() -> Callable[..., Any]:
     """Register Huey tasks. Must be called after init_huey."""
     global _encode_task
-    assert _huey is not None, "Huey not initialized — call init_huey first"
+    if _huey is None:
+        raise RuntimeError("Huey not initialized — call init_huey first")
     huey = _huey
 
     @huey.periodic_task(EVERY_MINUTE)  # type: ignore[untyped-decorator]
@@ -143,7 +145,9 @@ def _scan_library_if_due(db: FileDB, lib: LibraryConfig, respect_schedule: bool)
     # new_files is already sorted by codec_priority (HW-decodable first),
     # so hevc/av1/vp9 files enter Huey's FIFO queue ahead of h264/unknown.
     for file_path, profile, _codec in new_files:
-        assert _encode_task is not None
+        if _encode_task is None:
+            raise RuntimeError("Tasks not registered")
+
         _encode_task(file_path, profile)
 
 
@@ -210,7 +214,8 @@ def _do_release_held_files() -> None:
             if changed:
                 codec = _probe_codec(path, config.general.ffprobe_path)
                 db.update_video_codec(path, codec)
-                assert _encode_task is not None
+                if _encode_task is None:
+                    raise RuntimeError("Tasks not registered")
                 _encode_task(path, str(record["profile"]))
                 log_event(log, logging.INFO, "file_stable_ready", "Queued stable held file",
                           file_path=path, library=str(record["library"]), codec=codec)
@@ -225,7 +230,9 @@ def _select_best_file(
     """Pick a higher-priority pending file if one exists, re-queuing the original."""
     best = db.get_next_pending(priority_codecs=priority_codecs)
     if best is not None and best["path"] != file_path:
-        assert _encode_task is not None
+        if _encode_task is None:
+            raise RuntimeError("Tasks not registered")
+
         _encode_task(file_path, profile_name)
         log_event(log, logging.INFO, "encode_priority_swap",
                   "Swapped to higher-priority file",
@@ -307,7 +314,9 @@ def _do_encode(file_path: str, profile_name: str) -> None:
     queue entries benefit from priority ordering even though Huey itself is FIFO.
     """
     if not _encoding_enabled.is_set():
-        assert _encode_task is not None
+        if _encode_task is None:
+            raise RuntimeError("Tasks not registered")
+
         _encode_task(file_path, profile_name)
         return
     config = _get_config()

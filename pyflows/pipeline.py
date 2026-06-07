@@ -165,11 +165,6 @@ def build_encode_command(
     )
 
 
-def _audio_input_index(all_audio: list[StreamInfo], stream: StreamInfo) -> int:
-    """Get the audio-relative index (0:a:N) for a stream."""
-    return _audio_input_index_by_source_index(all_audio, stream.index)
-
-
 def _audio_input_index_by_source_index(all_audio: list[StreamInfo], source_index: int) -> int:
     """Get the audio-relative index (0:a:N) for a source stream index."""
     indices = [s.index for s in all_audio]
@@ -179,11 +174,6 @@ def _audio_input_index_by_source_index(all_audio: list[StreamInfo], source_index
         raise ValueError(
             f"Audio stream index {source_index} not found in available audio streams: {indices}"
         ) from None
-
-
-def _sub_input_index(all_subs: list[StreamInfo], stream: StreamInfo) -> int:
-    """Get the subtitle-relative index (0:s:N) for a stream."""
-    return _sub_input_index_by_source_index(all_subs, stream.index)
 
 
 def _sub_input_index_by_source_index(all_subs: list[StreamInfo], source_index: int) -> int:

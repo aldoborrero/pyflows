@@ -2,16 +2,19 @@
 """Audio track selection, filtering, and stereo track creation."""
 
 from dataclasses import dataclass
+from typing import Literal
 
 from pyflows.config import AudioConfig
 from pyflows.constants import COMMENTARY_PATTERN
 from pyflows.probe import StreamInfo
 
+AudioActionType = Literal["copy", "encode"]
+
 
 @dataclass
 class AudioAction:
     stream: StreamInfo
-    action: str  # "copy" or "encode"
+    action: AudioActionType
     codec: str = ""
     channels: int = 0
     bitrate: int = 0

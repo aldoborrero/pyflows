@@ -53,8 +53,11 @@ class GeneralConfig(BaseModel):
     metrics_port: int = 9327
 
 
+VideoCodec = Literal["hevc", "av1"]
+
+
 class VideoConfig(BaseModel):
-    codec: str  # hevc, av1
+    codec: VideoCodec
     bit_depth: int = 10
     encoder: Literal["vaapi", "cpu"] = "vaapi"
     quality: int = 22

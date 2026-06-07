@@ -23,6 +23,14 @@ from pyflows.scanner import scan_library
 console = Console()
 log = logging.getLogger("pyflows")
 
+STATUS_COLORS: dict[str, str] = {
+    "pending": "yellow",
+    "processing": "cyan",
+    "completed": "green",
+    "failed": "red",
+    "skipped": "dim",
+}
+
 
 def resolve_config(config_path: Path | None) -> Path:
     if config_path is not None:
@@ -145,8 +153,7 @@ def status(config_path: Path | None) -> None:
         for s in [FileStatus.PENDING, FileStatus.PROCESSING, FileStatus.COMPLETED,
                   FileStatus.FAILED, FileStatus.SKIPPED]:
             count = db.count_by_status(s)
-            color = {"pending": "yellow", "processing": "cyan", "completed": "green",
-                     "failed": "red", "skipped": "dim"}.get(s, "")
+            color = STATUS_COLORS.get(s, "")
             table.add_row(f"[{color}]{s}[/{color}]", str(count))
 
     console.print(table)
@@ -176,9 +183,7 @@ def history(config_path: Path | None, limit: int) -> None:
         for record in db.get_history(limit=limit):
             name = Path(record["path"]).name
             status_val: str = record["status"]
-            color = {"completed": "green", "failed": "red", "skipped": "dim"}.get(
-                status_val, ""
-            )
+            color = STATUS_COLORS.get(status_val, "")
             table.add_row(
                 name,
                 f"[{color}]{status_val}[/{color}]",
