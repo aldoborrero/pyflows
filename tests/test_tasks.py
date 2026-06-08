@@ -300,3 +300,43 @@ def test_select_best_file_swaps_to_priority(tmp_config) -> None:
         mock_encode.assert_called_once_with(h264_path, "test")
     finally:
         tasks._state = original_state
+
+
+def test_concurrent_claim_prevents_double_encode(tmp_config) -> None:
+    """Two threads racing on the same file: only one successfully claims it."""
+    import threading
+    config = load_config(tmp_config)
+
+    from huey import SqliteHuey  # type: ignore[import-not-found]
+    requeued: list[tuple[str, str]] = []
+    original_state = tasks._state
+    tasks._state = DaemonState(
+        config=config,
+        huey=SqliteHuey(filename=":memory:", immediate=True),
+        encode_task=lambda path, profile: requeued.append((path, profile)),
+    )
+
+    try:
+        with FileDB(config.general.db_path) as db:
+            db.upsert("/media/race.mkv", library="Test Library", profile="test",
+                      file_hash="abc", size=1000, video_codec="h264")
+
+        results: list[bool] = []
+        barrier = threading.Barrier(2)
+
+        def try_claim() -> None:
+            barrier.wait()
+            with FileDB(config.general.db_path) as db:
+                results.append(db.claim_for_processing("/media/race.mkv"))
+
+        t1 = threading.Thread(target=try_claim)
+        t2 = threading.Thread(target=try_claim)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert results.count(True) == 1
+        assert results.count(False) == 1
+    finally:
+        tasks._state = original_state

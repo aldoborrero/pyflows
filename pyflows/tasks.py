@@ -308,27 +308,29 @@ def _encode_file(file_path: str, profile_name: str) -> None:
         log_event(log, logging.ERROR, "unknown_profile", "Unknown profile", profile=profile_name)
         return
 
-    # Priority check: pick the best pending file instead of blindly encoding
-    # whatever Huey dequeued.  Only swap if a different file ranks higher.
-    #
-    # SAFETY: this check is NOT atomic with update_status(PROCESSING) below.
-    # With workers=1 (the required and default setting) there is no race.
-    # With workers>1 two workers could both select the same file from
-    # get_next_pending() and double-encode it.  The warning in start_daemon()
-    # guards against misconfiguration.
-    with FileDB(config.general.db_path) as _check_db:
+    with FileDB(config.general.db_path) as db:
         file_path, profile_name = _select_best_file(
-            file_path, profile_name, _check_db, config.resolved_priority_codecs())
+            file_path, profile_name, db, config.resolved_priority_codecs())
+
+        if not db.claim_for_processing(file_path):
+            log_event(log, logging.DEBUG, "encode_claim_failed",
+                      "File already claimed by another worker",
+                      file_path=file_path)
+            return
 
     if profile_name not in config.profiles:
         log_event(log, logging.ERROR, "unknown_profile", "Unknown profile after priority swap", profile=profile_name)
+        return
+
+    if not Path(file_path).exists():
+        with FileDB(config.general.db_path) as db:
+            db.update_status(file_path, FileStatus.FAILED, error="File no longer exists on disk")
         return
 
     profile = config.profiles[profile_name]
     notifier = Notifier(config.notifications)
 
     with FileDB(config.general.db_path) as db:
-        db.update_status(file_path, FileStatus.PROCESSING)
 
         if config.hooks.pre_encode:
             if not run_hooks(config.hooks.pre_encode, "pre_encode", file_path, profile=profile_name, timeout=config.hooks.timeout):
@@ -510,11 +512,9 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
     if config.general.workers > 1:
         log_event(
             log,
-            logging.WARNING,
-            "workers_unsafe",
-            "workers > 1 is not safe with priority-swap encoding: two workers may "
-            "race on get_next_pending() and double-encode the same file. "
-            "Set workers: 1 in config to eliminate this risk.",
+            logging.INFO,
+            "workers_config",
+            f"Running with {config.general.workers} worker threads",
             workers=config.general.workers,
         )
 

@@ -267,6 +267,20 @@ class FileDB:
             self.conn.execute("UPDATE files SET status=? WHERE path=?", (status, path))
         self.conn.commit()
 
+    def claim_for_processing(self, path: str) -> bool:
+        """Atomically claim a pending file for processing.
+
+        Returns True if the claim succeeded (this caller should encode it).
+        Returns False if another worker already claimed it.
+        """
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, started_at=?, next_retry_at=NULL "
+            "WHERE path=? AND status=?",
+            (FileStatus.PROCESSING, _utcnow_iso(), path, FileStatus.PENDING),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def update_video_codec(self, path: str, codec: str) -> None:
         """Store the probed video codec without touching any other field."""
         self.conn.execute(

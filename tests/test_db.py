@@ -205,3 +205,34 @@ def test_compute_file_hash_medium_file(tmp_path):
     h2 = compute_file_hash(str(f))
     assert h1 == h2
     assert len(h1) == 64
+
+
+def test_claim_for_processing_success(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", library="Movies", profile="movie",
+                  file_hash="abc123", size=1000, video_codec="h264")
+        assert db.claim_for_processing("/media/test.mkv") is True
+        record = db.get("/media/test.mkv")
+        assert record["status"] == FileStatus.PROCESSING
+        assert record["started_at"] is not None
+
+
+def test_claim_for_processing_double_claim(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", library="Movies", profile="movie",
+                  file_hash="abc123", size=1000, video_codec="h264")
+        assert db.claim_for_processing("/media/test.mkv") is True
+        assert db.claim_for_processing("/media/test.mkv") is False
+
+
+def test_claim_for_processing_wrong_status(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", library="Movies", profile="movie",
+                  file_hash="abc123", size=1000, video_codec="h264")
+        db.update_status("/media/test.mkv", FileStatus.COMPLETED)
+        assert db.claim_for_processing("/media/test.mkv") is False
+
+
+def test_claim_for_processing_nonexistent(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        assert db.claim_for_processing("/media/nonexistent.mkv") is False
