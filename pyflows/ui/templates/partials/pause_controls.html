@@ -4,10 +4,10 @@
     <label class="label cursor-pointer gap-2 py-0">
       <span class="label-text text-xs">{{ component|capitalize }}</span>
       {% if pause_state[component] %}
-      <input type="checkbox" class="toggle toggle-sm toggle-warning"
+      <input type="checkbox" class="toggle toggle-sm toggle-success" checked
              hx-post="/ui/api/pause/{{ component }}" hx-target="#pause-controls" hx-swap="outerHTML">
       {% else %}
-      <input type="checkbox" class="toggle toggle-sm toggle-success" checked
+      <input type="checkbox" class="toggle toggle-sm toggle-warning"
              hx-post="/ui/api/resume/{{ component }}" hx-target="#pause-controls" hx-swap="outerHTML">
       {% endif %}
     </label>
