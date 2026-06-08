@@ -1,18 +1,24 @@
-<article>
-  <header>Current Encode</header>
-  {% if progress.file_path %}
-  <p><strong>{{ progress.file_path.split('/')[-1] }}</strong></p>
-  {% if processing %}
-  <p class="muted">{{ processing['library'] }} &middot; {{ processing['video_codec'] or '?' }} &rarr; hevc</p>
-  {% endif %}
-  <progress value="{{ progress.out_time_us }}" max="{{ progress.out_time_us + 1 }}"></progress>
-  <div style="display:flex;gap:16px;flex-wrap:wrap">
-    <span>Speed: <strong>{{ "%.1f"|format(progress.speed) }}x</strong></span>
+<div class="card bg-base-200 shadow">
+  <div class="card-body p-4">
+    <h2 class="card-title text-sm font-semibold">Current Encode</h2>
+    {% if progress.file_path %}
+    <p class="font-bold text-base-content truncate" title="{{ progress.file_path }}">{{ progress.file_path.split('/')[-1] }}</p>
     {% if processing %}
-    <span>Size: <strong>{{ processing['size']|human_size }}</strong></span>
+    <div class="flex gap-2 flex-wrap">
+      <span class="badge badge-outline badge-sm">{{ processing['library'] }}</span>
+      <span class="badge badge-outline badge-accent badge-sm">{{ processing['video_codec'] or '?' }} &rarr; hevc</span>
+      {% if processing['size'] %}
+      <span class="badge badge-outline badge-sm">{{ processing['size']|human_size }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
+    <progress class="progress progress-accent w-full" value="{{ progress.out_time_us }}" max="{{ progress.out_time_us + 1 }}"></progress>
+    <div class="stat p-0">
+      <div class="stat-title text-xs">Speed</div>
+      <div class="stat-value text-lg">{{ "%.1f"|format(progress.speed) }}x</div>
+    </div>
+    {% else %}
+    <p class="text-base-content/40 text-sm py-4">Idle — no active encode</p>
     {% endif %}
   </div>
-  {% else %}
-  <p class="muted">Idle — no active encode</p>
-  {% endif %}
-</article>
+</div>

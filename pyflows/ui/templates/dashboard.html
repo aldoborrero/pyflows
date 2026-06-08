@@ -1,21 +1,20 @@
 {% extends "base.html" %}
 {% block title_suffix %} — Dashboard{% endblock %}
 {% block content %}
-<div hx-ext="sse" sse-connect="/ui/events">
+<div hx-ext="sse" sse-connect="/ui/events" class="flex flex-col gap-4">
 
-  <div id="status-bar" sse-swap="status-counts" hx-swap="innerHTML">
-    {% include "partials/status_bar.html" %}
-  </div>
-
-  {% include "partials/pause_controls.html" %}
-
-  <div style="display:grid;grid-template-columns:1fr;gap:16px">
-    <div id="encode-card" sse-swap="encode-progress" hx-swap="innerHTML">
-      {% include "partials/encode_progress.html" %}
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    <div id="status-bar" sse-swap="status-counts" hx-swap="innerHTML">
+      {% include "partials/status_bar.html" %}
     </div>
+    {% include "partials/pause_controls.html" %}
   </div>
 
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+  <div id="encode-card" sse-swap="encode-progress" hx-swap="innerHTML">
+    {% include "partials/encode_progress.html" %}
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
     <div id="queue-preview" sse-swap="queue-summary" hx-swap="innerHTML">
       {% include "partials/queue_preview.html" %}
     </div>

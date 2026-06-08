@@ -1,44 +1,73 @@
 {% extends "base.html" %}
 {% block title_suffix %} — Libraries{% endblock %}
 {% block content %}
-<h2>Libraries</h2>
+<h2 class="text-2xl font-bold mb-6">Libraries</h2>
 
-<div style="display:flex;gap:24px;margin-bottom:16px;flex-wrap:wrap">
-  <span>Total files: <strong>{{ total_files }}</strong></span>
-  <span>Completed: <strong>{{ total_completed }}</strong></span>
-  <span>Space saved: <strong>{{ total_saved|human_size }}</strong></span>
+<div class="stats stats-vertical sm:stats-horizontal shadow bg-base-200 w-full mb-8">
+  <div class="stat">
+    <div class="stat-title">Total Files</div>
+    <div class="stat-value text-primary">{{ total_files }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-title">Completed</div>
+    <div class="stat-value text-success">{{ total_completed }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-title">Space Saved</div>
+    <div class="stat-value text-accent">{{ total_saved|human_size }}</div>
+  </div>
 </div>
 
-{% for lib in library_stats %}
-<article id="library-{{ lib.library|replace(' ', '-') }}">
-  <header>
-    <strong>{{ lib.library }}</strong>
-    <span class="muted" style="float:right">{{ lib.config_path or '' }}</span>
-  </header>
-  <div style="margin-bottom:8px">
-    <span>Profile: <strong>{{ lib.profile }}</strong></span>
-    {% if lib.last_scan %} &middot; Last scan: {{ lib.last_scan|relative_time }}{% endif %}
+<div class="grid gap-6">
+  {% for lib in library_stats %}
+  <div class="card bg-base-200 shadow-lg" id="library-{{ lib.library|replace(' ', '-') }}">
+    <div class="card-body">
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 class="card-title text-lg">{{ lib.library }}</h3>
+          {% if lib.config_path %}
+          <p class="text-sm text-base-content/50"><kbd class="kbd kbd-xs">{{ lib.config_path }}</kbd></p>
+          {% endif %}
+        </div>
+        <div class="flex flex-wrap items-center gap-3 text-sm text-base-content/70">
+          <span>Profile: <span class="font-semibold text-base-content">{{ lib.profile }}</span></span>
+          {% if lib.last_scan %}
+          <span class="text-base-content/50">Last scan: {{ lib.last_scan|relative_time }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      {% set total = lib.completed + lib.pending + lib.failed + lib.skipped + lib.processing %}
+      {% if total > 0 %}
+      {% set pct = (lib.completed / total * 100)|round(1) %}
+      <div class="mt-4">
+        <div class="flex justify-between text-xs text-base-content/60 mb-1">
+          <span>Progress</span>
+          <span>{{ pct }}% complete</span>
+        </div>
+        <div class="flex h-3 rounded-full overflow-hidden bg-base-300">
+          {% if lib.completed %}<div class="bg-success" style="width:{{ (lib.completed / total * 100)|round(1) }}%" title="Completed: {{ lib.completed }}"></div>{% endif %}
+          {% if lib.pending %}<div class="bg-info" style="width:{{ (lib.pending / total * 100)|round(1) }}%" title="Pending: {{ lib.pending }}"></div>{% endif %}
+          {% if lib.processing %}<div class="bg-warning" style="width:{{ (lib.processing / total * 100)|round(1) }}%" title="Processing: {{ lib.processing }}"></div>{% endif %}
+          {% if lib.failed %}<div class="bg-error" style="width:{{ (lib.failed / total * 100)|round(1) }}%" title="Failed: {{ lib.failed }}"></div>{% endif %}
+          {% if lib.skipped %}<div class="bg-base-content/20" style="width:{{ (lib.skipped / total * 100)|round(1) }}%" title="Skipped: {{ lib.skipped }}"></div>{% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="flex flex-wrap gap-2 mt-4">
+        <span class="badge badge-success gap-1">{{ lib.completed }} done</span>
+        <span class="badge badge-info gap-1">{{ lib.pending }} pending</span>
+        {% if lib.processing %}<span class="badge badge-warning gap-1">{{ lib.processing }} encoding</span>{% endif %}
+        {% if lib.failed %}<span class="badge badge-error gap-1">{{ lib.failed }} failed</span>{% endif %}
+        <span class="badge badge-accent gap-1">{{ lib.saved|human_size }} saved</span>
+      </div>
+
+      <div class="card-actions justify-end mt-4">
+        <button hx-post="/ui/api/scan" hx-vals='{{ {"library": lib.library}|tojson|e }}' hx-target="#library-{{ lib.library|replace(' ', '-') }}" hx-swap="outerHTML" class="btn btn-primary btn-sm">Scan Now</button>
+      </div>
+    </div>
   </div>
-  <div style="display:flex;height:20px;border-radius:4px;overflow:hidden;margin-bottom:8px;background:var(--pico-muted-border-color)">
-    {% set total = lib.completed + lib.pending + lib.failed + lib.skipped + lib.processing %}
-    {% if total > 0 %}
-    {% if lib.completed %}<div style="width:{{ (lib.completed / total * 100)|round(1) }}%;background:#5cb85c" title="Completed: {{ lib.completed }}"></div>{% endif %}
-    {% if lib.pending %}<div style="width:{{ (lib.pending / total * 100)|round(1) }}%;background:var(--pico-primary-background)" title="Pending: {{ lib.pending }}"></div>{% endif %}
-    {% if lib.processing %}<div style="width:{{ (lib.processing / total * 100)|round(1) }}%;background:#f0ad4e" title="Processing: {{ lib.processing }}"></div>{% endif %}
-    {% if lib.failed %}<div style="width:{{ (lib.failed / total * 100)|round(1) }}%;background:#d9534f" title="Failed: {{ lib.failed }}"></div>{% endif %}
-    {% if lib.skipped %}<div style="width:{{ (lib.skipped / total * 100)|round(1) }}%;background:var(--pico-muted-border-color)" title="Skipped: {{ lib.skipped }}"></div>{% endif %}
-    {% endif %}
-  </div>
-  <div style="display:flex;gap:16px;flex-wrap:wrap">
-    <span class="badge badge-completed">{{ lib.completed }} done</span>
-    <span class="badge badge-pending">{{ lib.pending }} pending</span>
-    {% if lib.processing %}<span class="badge badge-processing">{{ lib.processing }} encoding</span>{% endif %}
-    {% if lib.failed %}<span class="badge badge-failed">{{ lib.failed }} failed</span>{% endif %}
-    <span class="badge badge-saved">{{ lib.saved|human_size }} saved</span>
-  </div>
-  <footer>
-    <button hx-post="/ui/api/scan" hx-vals='{{ {"library": lib.library}|tojson|e }}' hx-target="#library-{{ lib.library|replace(' ', '-') }}" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Scan Now</button>
-  </footer>
-</article>
-{% endfor %}
+  {% endfor %}
+</div>
 {% endblock %}

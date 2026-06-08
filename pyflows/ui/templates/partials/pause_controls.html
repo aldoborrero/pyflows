@@ -1,15 +1,16 @@
-<div id="pause-controls" role="group" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+<div id="pause-controls" class="flex gap-4 flex-wrap items-center">
   {% for component in ['scanning', 'encoding', 'watcher'] %}
-  {% if pause_state[component] %}
-  <button hx-post="/ui/api/pause/{{ component }}" hx-target="#pause-controls" hx-swap="outerHTML"
-          class="outline" style="padding:4px 12px;font-size:0.85em">
-    &#9654; {{ component|capitalize }}
-  </button>
-  {% else %}
-  <button hx-post="/ui/api/resume/{{ component }}" hx-target="#pause-controls" hx-swap="outerHTML"
-          class="outline secondary" style="padding:4px 12px;font-size:0.85em;opacity:0.7">
-    &#9646;&#9646; {{ component|capitalize }}
-  </button>
-  {% endif %}
+  <div class="form-control">
+    <label class="label cursor-pointer gap-2 py-0">
+      <span class="label-text text-xs">{{ component|capitalize }}</span>
+      {% if pause_state[component] %}
+      <input type="checkbox" class="toggle toggle-sm toggle-warning"
+             hx-post="/ui/api/pause/{{ component }}" hx-target="#pause-controls" hx-swap="outerHTML">
+      {% else %}
+      <input type="checkbox" class="toggle toggle-sm toggle-success" checked
+             hx-post="/ui/api/resume/{{ component }}" hx-target="#pause-controls" hx-swap="outerHTML">
+      {% endif %}
+    </label>
+  </div>
   {% endfor %}
 </div>

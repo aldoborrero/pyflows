@@ -1,8 +1,34 @@
-<div role="group" style="display:flex;gap:8px;flex-wrap:wrap">
-  <span class="badge badge-pending">{{ counts.pending }} pending</span>
-  {% if counts.processing %}<span class="badge badge-processing">{{ counts.processing }} encoding</span>{% endif %}
-  <span class="badge badge-completed">{{ counts.completed }} completed</span>
-  {% if counts.failed %}<span class="badge badge-failed">{{ counts.failed }} failed</span>{% endif %}
-  {% if counts.skipped %}<span class="badge badge-skipped">{{ counts.skipped }} skipped</span>{% endif %}
-  {% if saved %}<span class="badge badge-saved">{{ saved|human_size }} saved</span>{% endif %}
+<div class="stats stats-horizontal shadow bg-base-200 text-sm">
+  <div class="stat px-4 py-2">
+    <div class="stat-title text-xs">Pending</div>
+    <div class="stat-value text-lg text-info">{{ counts.pending }}</div>
+  </div>
+  {% if counts.processing %}
+  <div class="stat px-4 py-2">
+    <div class="stat-title text-xs">Encoding</div>
+    <div class="stat-value text-lg text-warning">{{ counts.processing }}</div>
+  </div>
+  {% endif %}
+  <div class="stat px-4 py-2">
+    <div class="stat-title text-xs">Completed</div>
+    <div class="stat-value text-lg text-success">{{ counts.completed }}</div>
+  </div>
+  {% if counts.failed %}
+  <div class="stat px-4 py-2">
+    <div class="stat-title text-xs">Failed</div>
+    <div class="stat-value text-lg text-error">{{ counts.failed }}</div>
+  </div>
+  {% endif %}
+  {% if counts.skipped %}
+  <div class="stat px-4 py-2">
+    <div class="stat-title text-xs">Skipped</div>
+    <div class="stat-value text-lg text-base-content/60">{{ counts.skipped }}</div>
+  </div>
+  {% endif %}
+  {% if saved %}
+  <div class="stat px-4 py-2">
+    <div class="stat-title text-xs">Saved</div>
+    <div class="stat-value text-lg text-success">{{ saved|human_size }}</div>
+  </div>
+  {% endif %}
 </div>

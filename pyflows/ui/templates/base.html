@@ -1,32 +1,49 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="night">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>pyflows{% block title_suffix %}{% endblock %}</title>
-  <link rel="stylesheet" href="/ui/static/pico.min.css">
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/ui/static/styles.css">
   <script src="/ui/static/htmx.min.js"></script>
   <script src="/ui/static/htmx-sse.min.js"></script>
 </head>
-<body>
-  <nav class="container-fluid">
-    <ul>
-      <li><strong>pyflows</strong></li>
-    </ul>
-    <ul>
-      <li><a href="/ui/"{% if active == 'dashboard' %} class="active"{% endif %}>Dashboard</a></li>
-      <li><a href="/ui/queue"{% if active == 'queue' %} class="active"{% endif %}>Queue</a></li>
-      <li><a href="/ui/history"{% if active == 'history' %} class="active"{% endif %}>History</a></li>
-      <li><a href="/ui/libraries"{% if active == 'libraries' %} class="active"{% endif %}>Libraries</a></li>
-      <li><a href="/ui/settings"{% if active == 'settings' %} class="active"{% endif %}>Settings</a></li>
-    </ul>
-  </nav>
-  <main class="container">
+<body class="min-h-screen flex flex-col bg-base-300">
+  <div class="navbar bg-base-200 border-b border-base-content/10 shadow-lg px-4">
+    <div class="navbar-start">
+      <a href="/ui/" class="btn btn-ghost text-primary text-lg font-bold tracking-tight normal-case">pyflows</a>
+    </div>
+    <div class="navbar-center hidden md:flex">
+      <ul class="menu menu-horizontal px-1 gap-1">
+        <li><a href="/ui/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a></li>
+        <li><a href="/ui/queue" class="{% if active == 'queue' %}active{% endif %}">Queue</a></li>
+        <li><a href="/ui/history" class="{% if active == 'history' %}active{% endif %}">History</a></li>
+        <li><a href="/ui/libraries" class="{% if active == 'libraries' %}active{% endif %}">Libraries</a></li>
+        <li><a href="/ui/settings" class="{% if active == 'settings' %}active{% endif %}">Settings</a></li>
+      </ul>
+    </div>
+    <div class="navbar-end md:hidden">
+      <div class="dropdown dropdown-end">
+        <label tabindex="0" class="btn btn-ghost">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+        </label>
+        <ul tabindex="0" class="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow-lg bg-base-200 rounded-box w-52">
+          <li><a href="/ui/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a></li>
+          <li><a href="/ui/queue" class="{% if active == 'queue' %}active{% endif %}">Queue</a></li>
+          <li><a href="/ui/history" class="{% if active == 'history' %}active{% endif %}">History</a></li>
+          <li><a href="/ui/libraries" class="{% if active == 'libraries' %}active{% endif %}">Libraries</a></li>
+          <li><a href="/ui/settings" class="{% if active == 'settings' %}active{% endif %}">Settings</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <main class="container mx-auto max-w-6xl px-4 py-6 flex-1">
     {% block content %}{% endblock %}
   </main>
-  <footer class="container">
-    <small>pyflows</small>
+  <footer class="footer footer-center p-4 text-base-content/40 text-sm">
+    <p>pyflows</p>
   </footer>
 </body>
 </html>

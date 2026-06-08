@@ -1,17 +1,20 @@
 {% extends "base.html" %}
 {% block title_suffix %} — History{% endblock %}
 {% block content %}
-<h2>History</h2>
-
-<div role="group">
-  <a href="/ui/history" role="button" class="{% if not status_filter %}outline contrast{% else %}outline{% endif %}">All</a>
-  <a href="/ui/history?status=completed" role="button" class="{% if status_filter == 'completed' %}outline contrast{% else %}outline{% endif %}">Completed</a>
-  <a href="/ui/history?status=failed" role="button" class="{% if status_filter == 'failed' %}outline contrast{% else %}outline{% endif %}">Failed</a>
-  <a href="/ui/history?status=skipped" role="button" class="{% if status_filter == 'skipped' %}outline contrast{% else %}outline{% endif %}">Skipped</a>
+<div class="flex items-center justify-between mb-6">
+  <h2 class="text-2xl font-bold">History</h2>
 </div>
 
-<div style="display:flex;gap:8px;margin-bottom:16px">
-  <select name="library" hx-get="/ui/partials/history-table" hx-target="#history-tbody"
+<div class="tabs tabs-boxed bg-base-200 mb-4 w-fit">
+  <a href="/ui/history" class="tab{% if not status_filter %} tab-active{% endif %}">All</a>
+  <a href="/ui/history?status=completed" class="tab{% if status_filter == 'completed' %} tab-active{% endif %}">Completed</a>
+  <a href="/ui/history?status=failed" class="tab{% if status_filter == 'failed' %} tab-active{% endif %}">Failed</a>
+  <a href="/ui/history?status=skipped" class="tab{% if status_filter == 'skipped' %} tab-active{% endif %}">Skipped</a>
+</div>
+
+<div class="flex flex-wrap gap-2 mb-4 items-center">
+  <select name="library" class="select select-bordered"
+          hx-get="/ui/partials/history-table" hx-target="#history-tbody"
           hx-swap="innerHTML" hx-include="[name=status_val]">
     <option value="">All libraries</option>
     {% for lib in libraries %}
@@ -20,30 +23,55 @@
   </select>
   <input type="hidden" name="status_val" value="{{ status_filter or '' }}">
   {% if stats.failed > 0 %}
-  <button hx-post="/ui/api/retry-all" hx-target="#history-tbody" hx-swap="innerHTML"
-          hx-confirm="Retry all {{ stats.failed }} failed files?" class="outline secondary">Retry All Failed</button>
+  <button class="btn btn-error btn-sm"
+          hx-post="/ui/api/retry-all" hx-target="#history-tbody" hx-swap="innerHTML"
+          hx-confirm="Retry all {{ stats.failed }} failed files?">Retry All Failed</button>
   {% endif %}
 </div>
 
-<div id="history-stats" style="display:flex;gap:24px;margin-bottom:16px;flex-wrap:wrap">
-  <span>Total: <strong>{{ stats.total }}</strong></span>
-  <span>Success rate: <strong>{{ stats.success_rate }}%</strong></span>
-  <span>Space saved: <strong>{{ stats.saved|human_size }}</strong></span>
+<div id="history-stats" class="stats shadow bg-base-200 mb-4 w-full">
+  <div class="stat">
+    <div class="stat-title">Total</div>
+    <div class="stat-value text-lg">{{ stats.total }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-title">Success Rate</div>
+    <div class="stat-value text-lg text-success">{{ stats.success_rate }}%</div>
+  </div>
+  <div class="stat">
+    <div class="stat-title">Space Saved</div>
+    <div class="stat-value text-lg text-info">{{ stats.saved|human_size }}</div>
+  </div>
 </div>
 
-<figure>
-  <table role="grid">
-    <thead>
-      <tr><th>Status</th><th>File</th><th>Library</th><th>Codec</th><th>Saved</th><th>When</th><th></th></tr>
-    </thead>
-    <tbody id="history-tbody">
-      {% include "partials/history_table.html" %}
-    </tbody>
-  </table>
-</figure>
+<div class="card bg-base-200 shadow-lg">
+  <div class="card-body p-0">
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>File</th>
+            <th>Library</th>
+            <th>Codec</th>
+            <th>Saved</th>
+            <th>When</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="history-tbody">
+          {% include "partials/history_table.html" %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 {% if files|length >= 50 %}
-<button hx-get="/ui/partials/history-table?offset=50{% if status_filter %}&status_val={{ status_filter }}{% endif %}"
-        hx-target="#history-tbody" hx-swap="beforeend">Load more</button>
+<div class="flex justify-center mt-4">
+  <button class="btn btn-ghost"
+          hx-get="/ui/partials/history-table?offset=50{% if status_filter %}&status_val={{ status_filter }}{% endif %}"
+          hx-target="#history-tbody" hx-swap="beforeend">Load more</button>
+</div>
 {% endif %}
 {% endblock %}

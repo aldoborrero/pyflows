@@ -1,29 +1,51 @@
 {% for f in files %}
-<tr>
-  <td><span class="badge badge-{{ f['status'] }}">{{ f['status'] }}</span></td>
-  <td title="{{ f['path'] }}"><a href="/ui/files/{{ f['id'] }}">{{ f['path'].split('/')[-1]|truncate(45) }}</a></td>
+<tr class="hover">
+  <td>
+    {% if f['status'] == 'completed' %}
+    <span class="badge badge-success badge-sm">completed</span>
+    {% elif f['status'] == 'failed' %}
+    <span class="badge badge-error badge-sm">failed</span>
+    {% elif f['status'] == 'skipped' %}
+    <span class="badge badge-warning badge-sm">skipped</span>
+    {% else %}
+    <span class="badge badge-sm">{{ f['status'] }}</span>
+    {% endif %}
+  </td>
+  <td>
+    <a href="/ui/files/{{ f['id'] }}" class="link link-hover" title="{{ f['path'] }}">
+      <kbd class="kbd kbd-sm">{{ f['path'].split('/')[-1]|truncate(45) }}</kbd>
+    </a>
+  </td>
   <td>{{ f['library'] }}</td>
   <td>
     {% if f['status'] == 'completed' %}
-    {{ f['video_codec'] or '?' }} &rarr; {{ f['output_codec'] or '?' }}
+    <span class="text-sm">{{ f['video_codec'] or '?' }} &rarr; {{ f['output_codec'] or '?' }}</span>
     {% elif f['status'] == 'failed' %}
-    <details><summary>{{ (f['error'] or '')|truncate(40) }}</summary>{{ f['error'] }}</details>
-    {% else %}—{% endif %}
+    <div class="tooltip tooltip-left" data-tip="{{ f['error'] }}">
+      <span class="text-sm text-error cursor-help">{{ (f['error'] or '')|truncate(40) }}</span>
+    </div>
+    {% else %}
+    <span class="text-base-content/50">—</span>
+    {% endif %}
   </td>
   <td>
     {% if f['status'] == 'completed' and f['output_size'] %}
       {% set delta = f['size'] - f['output_size'] %}
       {% if delta > 0 %}
-      <span class="saved-positive">-{{ delta|human_size }}</span>
+      <span class="text-success font-medium">-{{ delta|human_size }}</span>
       {% else %}
-      <span class="saved-negative">+{{ (-delta)|human_size }}</span>
+      <span class="text-error font-medium">+{{ (-delta)|human_size }}</span>
       {% endif %}
-    {% else %}—{% endif %}
+    {% else %}
+    <span class="text-base-content/50">—</span>
+    {% endif %}
   </td>
-  <td>{{ f['completed_at']|relative_time }}</td>
+  <td class="text-sm opacity-70">{{ f['completed_at']|relative_time }}</td>
   <td>
     {% if f['status'] == 'failed' %}
-    <button hx-post="/ui/api/retry" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Retry</button>
+    <button class="btn btn-ghost btn-xs"
+            hx-post="/ui/api/retry" hx-vals='{{ {"path": f["path"]}|tojson|e }}'
+            hx-target="closest tr" hx-swap="outerHTML">Retry</button>
     {% endif %}
   </td>
 </tr>

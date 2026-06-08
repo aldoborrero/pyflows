@@ -1,78 +1,151 @@
 {% extends "base.html" %}
 {% block title_suffix %} — {{ file['path'].split('/')[-1] }}{% endblock %}
 {% block content %}
-<a href="javascript:history.back()">&larr; Back</a>
+<a href="javascript:history.back()" class="btn btn-ghost btn-sm gap-1 mb-4">&larr; Back</a>
 
-<article id="file-detail"
+<div id="file-detail"
   {% if file['status'] in ('pending', 'processing') %}
   hx-get="/ui/partials/file-detail/{{ file_id }}" hx-trigger="every 5s" hx-swap="outerHTML" hx-target="#file-detail"
   {% endif %}>
-  <header>
-    <strong>{{ file['path'].split('/')[-1] }}</strong>
-    <span class="badge badge-{{ file['status'] }}" style="float:right">{{ file['status'] }}</span>
-  </header>
 
-  <p class="muted" style="word-break:break-all">{{ file['path'] }}</p>
-
-  <h4>Metadata</h4>
-  <dl>
-    <dt>Library</dt><dd>{{ file['library'] }}</dd>
-    <dt>Profile</dt><dd>{{ file['profile'] }}</dd>
-    <dt>Video Codec</dt><dd>{{ file['video_codec'] or '—' }}{% if file['output_codec'] %} &rarr; {{ file['output_codec'] }}{% endif %}</dd>
-    <dt>Input Size</dt><dd>{{ file['size']|human_size }}</dd>
-    {% if file['output_size'] %}
-    <dt>Output Size</dt>
-    <dd>
-      {{ file['output_size']|human_size }}
-      {% set delta = file['size'] - file['output_size'] %}
-      {% if delta > 0 %}
-      (<span class="saved-positive">-{{ delta|human_size }}, {{ (delta / file['size'] * 100)|round(1) }}%</span>)
-      {% elif delta < 0 %}
-      (<span class="saved-negative">+{{ (-delta)|human_size }}</span>)
-      {% endif %}
-    </dd>
-    {% endif %}
-    {% if file['arr_source'] %}
-    <dt>Source</dt><dd>{{ file['arr_source'] }}{% if file['arr_id'] %} (#{{ file['arr_id'] }}){% endif %}</dd>
-    {% endif %}
-    <dt>File Hash</dt><dd><code>{{ file['file_hash'][:16] }}...</code></dd>
-  </dl>
-
-  <h4>Timing</h4>
-  <dl>
-    <dt>Created</dt><dd>{{ file['created_at'] or '—' }} ({{ file['created_at']|relative_time }})</dd>
-    <dt>Started</dt><dd>{{ file['started_at'] or '—' }} ({{ file['started_at']|relative_time }})</dd>
-    <dt>Completed</dt><dd>{{ file['completed_at'] or '—' }} ({{ file['completed_at']|relative_time }})</dd>
-    <dt>Retry Count</dt><dd>{{ file['retry_count'] or 0 }}</dd>
-    {% if file['next_retry_at'] %}
-    <dt>Next Retry</dt><dd>{{ file['next_retry_at'] }} ({{ file['next_retry_at']|relative_time }})</dd>
-    {% endif %}
-    {% if file['hold_until'] %}
-    <dt>Hold Until</dt><dd>{{ file['hold_until'] }} ({{ file['hold_until']|relative_time }})</dd>
-    {% endif %}
-  </dl>
-
-  {% if file['error'] %}
-  <h4>Error</h4>
-  <pre><code>{{ file['error'] }}</code></pre>
-  {% endif %}
-
-  {% if progress and progress.file_path == file['path'] %}
-  <h4>Encode Progress</h4>
-  <progress value="{{ progress.out_time_us }}" max="{{ progress.out_time_us + 1 }}"></progress>
-  <p>Speed: <strong>{{ "%.1f"|format(progress.speed) }}x</strong></p>
-  {% endif %}
-
-  <div role="group" style="margin-top:16px">
-    {% if file['status'] == 'failed' %}
-    <button hx-post="/ui/api/retry" hx-vals='{{ {"path": file["path"]}|tojson|e }}' hx-target="#file-detail" hx-swap="outerHTML" class="outline">Retry</button>
-    {% endif %}
-    {% if file['status'] == 'pending' %}
-    <button hx-post="/ui/api/skip" hx-vals='{{ {"path": file["path"]}|tojson|e }}' hx-target="#file-detail" hx-swap="outerHTML" class="outline secondary">Skip</button>
-    {% endif %}
-    {% if file['status'] in ('completed', 'skipped') %}
-    <button hx-post="/ui/api/reencode" hx-vals='{{ {"path": file["path"]}|tojson|e }}' hx-target="#file-detail" hx-swap="outerHTML" hx-confirm="Re-encode this file?" class="outline">Re-encode</button>
+  <div class="flex flex-wrap items-center gap-3 mb-2">
+    <h2 class="text-2xl font-bold">{{ file['path'].split('/')[-1] }}</h2>
+    {% if file['status'] == 'completed' %}
+    <span class="badge badge-success">{{ file['status'] }}</span>
+    {% elif file['status'] == 'processing' %}
+    <span class="badge badge-warning">{{ file['status'] }}</span>
+    {% elif file['status'] == 'failed' %}
+    <span class="badge badge-error">{{ file['status'] }}</span>
+    {% elif file['status'] == 'pending' %}
+    <span class="badge badge-info">{{ file['status'] }}</span>
+    {% elif file['status'] == 'skipped' %}
+    <span class="badge badge-ghost">{{ file['status'] }}</span>
+    {% else %}
+    <span class="badge">{{ file['status'] }}</span>
     {% endif %}
   </div>
-</article>
+  <p class="text-sm text-base-content/50 break-all mb-6"><kbd class="kbd kbd-sm">{{ file['path'] }}</kbd></p>
+
+  <div class="grid gap-6">
+    <!-- Metadata -->
+    <div class="card bg-base-200 shadow">
+      <div class="card-body">
+        <h3 class="card-title text-lg">Metadata</h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 mt-2">
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Library</span>
+            <span class="font-medium">{{ file['library'] }}</span>
+          </div>
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Profile</span>
+            <span class="font-medium">{{ file['profile'] }}</span>
+          </div>
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Video Codec</span>
+            <span class="font-medium">{{ file['video_codec'] or '—' }}{% if file['output_codec'] %} &rarr; {{ file['output_codec'] }}{% endif %}</span>
+          </div>
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Input Size</span>
+            <span class="font-medium">{{ file['size']|human_size }}</span>
+          </div>
+          {% if file['output_size'] %}
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Output Size</span>
+            <span class="font-medium">
+              {{ file['output_size']|human_size }}
+              {% set delta = file['size'] - file['output_size'] %}
+              {% if delta > 0 %}
+              <span class="text-success">(-{{ delta|human_size }}, {{ (delta / file['size'] * 100)|round(1) }}%)</span>
+              {% elif delta < 0 %}
+              <span class="text-error">(+{{ (-delta)|human_size }})</span>
+              {% endif %}
+            </span>
+          </div>
+          {% endif %}
+          {% if file['arr_source'] %}
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Source</span>
+            <span class="font-medium">{{ file['arr_source'] }}{% if file['arr_id'] %} (#{{ file['arr_id'] }}){% endif %}</span>
+          </div>
+          {% endif %}
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">File Hash</span>
+            <span class="font-medium"><kbd class="kbd kbd-xs">{{ file['file_hash'][:16] }}...</kbd></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timing -->
+    <div class="card bg-base-200 shadow">
+      <div class="card-body">
+        <h3 class="card-title text-lg">Timing</h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 mt-2">
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Created</span>
+            <span class="font-medium">{{ file['created_at'] or '—' }} <span class="text-base-content/40">({{ file['created_at']|relative_time }})</span></span>
+          </div>
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Started</span>
+            <span class="font-medium">{{ file['started_at'] or '—' }} <span class="text-base-content/40">({{ file['started_at']|relative_time }})</span></span>
+          </div>
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Completed</span>
+            <span class="font-medium">{{ file['completed_at'] or '—' }} <span class="text-base-content/40">({{ file['completed_at']|relative_time }})</span></span>
+          </div>
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Retry Count</span>
+            <span class="font-medium">{{ file['retry_count'] or 0 }}</span>
+          </div>
+          {% if file['next_retry_at'] %}
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Next Retry</span>
+            <span class="font-medium">{{ file['next_retry_at'] }} <span class="text-base-content/40">({{ file['next_retry_at']|relative_time }})</span></span>
+          </div>
+          {% endif %}
+          {% if file['hold_until'] %}
+          <div class="flex justify-between border-b border-base-content/5 py-1">
+            <span class="text-base-content/60">Hold Until</span>
+            <span class="font-medium">{{ file['hold_until'] }} <span class="text-base-content/40">({{ file['hold_until']|relative_time }})</span></span>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Error -->
+    {% if file['error'] %}
+    <div class="card bg-error/10 border border-error/30 shadow">
+      <div class="card-body">
+        <h3 class="card-title text-lg text-error">Error</h3>
+        <pre class="bg-base-300 rounded-lg p-4 overflow-x-auto text-sm mt-2"><code>{{ file['error'] }}</code></pre>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Encode Progress -->
+    {% if progress and progress.file_path == file['path'] %}
+    <div class="card bg-base-200 shadow">
+      <div class="card-body">
+        <h3 class="card-title text-lg">Encode Progress</h3>
+        <progress class="progress progress-primary w-full mt-2" value="{{ progress.out_time_us }}" max="{{ progress.out_time_us + 1 }}"></progress>
+        <p class="text-sm mt-1">Speed: <span class="font-bold">{{ "%.1f"|format(progress.speed) }}x</span></p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Actions -->
+  <div class="flex flex-wrap gap-2 mt-6">
+    {% if file['status'] == 'failed' %}
+    <button hx-post="/ui/api/retry" hx-vals='{{ {"path": file["path"]}|tojson|e }}' hx-target="#file-detail" hx-swap="outerHTML" class="btn btn-primary btn-sm">Retry</button>
+    {% endif %}
+    {% if file['status'] == 'pending' %}
+    <button hx-post="/ui/api/skip" hx-vals='{{ {"path": file["path"]}|tojson|e }}' hx-target="#file-detail" hx-swap="outerHTML" class="btn btn-secondary btn-sm">Skip</button>
+    {% endif %}
+    {% if file['status'] in ('completed', 'skipped') %}
+    <button hx-post="/ui/api/reencode" hx-vals='{{ {"path": file["path"]}|tojson|e }}' hx-target="#file-detail" hx-swap="outerHTML" hx-confirm="Re-encode this file?" class="btn btn-ghost btn-sm">Re-encode</button>
+    {% endif %}
+  </div>
+</div>
 {% endblock %}

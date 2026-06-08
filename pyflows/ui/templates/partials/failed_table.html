@@ -1,32 +1,47 @@
 {% if failed %}
-<article>
-  <header>
-    Failed ({{ failed|length }})
-    <span style="float:right">
-      <button hx-post="/ui/api/delete-failed" hx-target="#failed-table" hx-swap="innerHTML" hx-confirm="Delete all {{ failed|length }} failed records?" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Clear All</button>
-      <button hx-post="/ui/api/retry-all" hx-target="#failed-table" hx-swap="innerHTML" hx-confirm="Retry all failed files?" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Retry All</button>
-    </span>
-  </header>
-  <figure>
-    <table role="grid">
-      <thead>
-        <tr><th>File</th><th>Library</th><th>Error</th><th>When</th><th></th></tr>
-      </thead>
-      <tbody>
-        {% for f in failed %}
-        <tr>
-          <td title="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(40) }}</td>
-          <td>{{ f['library'] }}</td>
-          <td><details><summary>{{ f['error']|truncate(50) }}</summary>{{ f['error'] }}</details></td>
-          <td>{{ f['completed_at']|relative_time }}</td>
-          <td>
-            <button hx-post="/ui/api/retry" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Retry</button>
-            <button hx-post="/ui/api/delete" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="delete" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Delete</button>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </figure>
-</article>
+<div class="card bg-base-200 shadow">
+  <div class="card-body p-4">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h2 class="card-title text-sm font-semibold">Failed <span class="badge badge-sm badge-error ml-1">{{ failed|length }}</span></h2>
+      <div class="join">
+        <button hx-post="/ui/api/delete-failed" hx-target="#failed-table" hx-swap="innerHTML" hx-confirm="Delete all {{ failed|length }} failed records?" class="btn btn-ghost btn-xs join-item">Clear All</button>
+        <button hx-post="/ui/api/retry-all" hx-target="#failed-table" hx-swap="innerHTML" hx-confirm="Retry all failed files?" class="btn btn-ghost btn-xs join-item">Retry All</button>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="table table-xs table-zebra">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Library</th>
+            <th>Error</th>
+            <th>When</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in failed %}
+          <tr>
+            <td class="truncate max-w-[200px]"><span class="tooltip tooltip-right" data-tip="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(40) }}</span></td>
+            <td>{{ f['library'] }}</td>
+            <td>
+              <details class="collapse collapse-arrow bg-base-300 rounded">
+                <summary class="collapse-title text-xs p-1 min-h-0">{{ f['error']|truncate(50) }}</summary>
+                <div class="collapse-content text-xs"><p>{{ f['error'] }}</p></div>
+              </details>
+            </td>
+            <td class="text-base-content/60 whitespace-nowrap">{{ f['completed_at']|relative_time }}</td>
+            <td>
+              <div class="join">
+                <button hx-post="/ui/api/retry" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="outerHTML" class="btn btn-ghost btn-xs join-item">Retry</button>
+                <button hx-post="/ui/api/delete" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="delete" class="btn btn-ghost btn-xs text-error join-item">Delete</button>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endif %}

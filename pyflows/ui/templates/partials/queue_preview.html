@@ -1,26 +1,34 @@
-<article>
-  <header>Queue ({{ pending|length }} next)
-    <a href="/ui/queue" style="float:right;font-size:1em;text-transform:none;letter-spacing:0">View all &rarr;</a>
-  </header>
-  {% if pending %}
-  <figure>
-    <table role="grid">
-      <thead>
-        <tr><th>File</th><th>Library</th><th>Codec</th><th>Size</th></tr>
-      </thead>
-      <tbody>
-        {% for f in pending %}
-        <tr>
-          <td title="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(40) }}</td>
-          <td>{{ f['library'] }}</td>
-          <td>{{ f['video_codec'] or '?' }}</td>
-          <td>{{ f['size']|human_size }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </figure>
-  {% else %}
-  <p class="muted" style="text-align:center;padding:20px 0">Queue is empty</p>
-  {% endif %}
-</article>
+<div class="card bg-base-200 shadow">
+  <div class="card-body p-4">
+    <div class="flex items-center justify-between">
+      <h2 class="card-title text-sm font-semibold">Queue <span class="badge badge-sm badge-ghost ml-1">{{ pending|length }}</span></h2>
+      <a href="/ui/queue" class="link link-hover text-xs text-primary">View all &rarr;</a>
+    </div>
+    {% if pending %}
+    <div class="overflow-x-auto">
+      <table class="table table-xs table-zebra">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Library</th>
+            <th>Codec</th>
+            <th>Size</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in pending %}
+          <tr>
+            <td class="truncate max-w-[200px]"><span class="tooltip tooltip-right" data-tip="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(40) }}</span></td>
+            <td>{{ f['library'] }}</td>
+            <td><span class="badge badge-outline badge-xs">{{ f['video_codec'] or '?' }}</span></td>
+            <td class="text-base-content/60">{{ f['size']|human_size }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-base-content/40 text-sm text-center py-6">Queue is empty</p>
+    {% endif %}
+  </div>
+</div>

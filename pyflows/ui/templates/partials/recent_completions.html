@@ -1,37 +1,57 @@
-<article>
-  <header>Recent Activity
-    <a href="/ui/history" style="float:right;font-size:1em;text-transform:none;letter-spacing:0">View all &rarr;</a>
-  </header>
-  {% if history %}
-  <figure>
-    <table role="grid">
-      <thead>
-        <tr><th>Status</th><th>File</th><th>Library</th><th>Codec</th><th>Saved</th><th>When</th></tr>
-      </thead>
-      <tbody>
-        {% for f in history %}
-        <tr>
-          <td><span class="badge badge-{{ f['status'] }}" style="font-size:0.75em;padding:2px 8px">{{ f['status'] }}</span></td>
-          <td title="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(35) }}</td>
-          <td>{{ f['library'] }}</td>
-          <td>{{ f['video_codec'] or '?' }}{% if f['output_codec'] %} &rarr; {{ f['output_codec'] }}{% endif %}</td>
-          <td>
-            {% if f['status'] == 'completed' and f['output_size'] %}
-              {% set delta = f['size'] - f['output_size'] %}
-              {% if delta > 0 %}
-              <span class="saved-positive">-{{ delta|human_size }}</span>
+<div class="card bg-base-200 shadow">
+  <div class="card-body p-4">
+    <div class="flex items-center justify-between">
+      <h2 class="card-title text-sm font-semibold">Recent Activity</h2>
+      <a href="/ui/history" class="link link-hover text-xs text-primary">View all &rarr;</a>
+    </div>
+    {% if history %}
+    <div class="overflow-x-auto">
+      <table class="table table-xs table-zebra">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>File</th>
+            <th>Library</th>
+            <th>Codec</th>
+            <th>Saved</th>
+            <th>When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in history %}
+          <tr>
+            <td>
+              {% if f['status'] == 'completed' %}
+              <span class="badge badge-success badge-xs">{{ f['status'] }}</span>
+              {% elif f['status'] == 'failed' %}
+              <span class="badge badge-error badge-xs">{{ f['status'] }}</span>
+              {% elif f['status'] == 'skipped' %}
+              <span class="badge badge-ghost badge-xs">{{ f['status'] }}</span>
               {% else %}
-              <span class="saved-negative">+{{ (-delta)|human_size }}</span>
+              <span class="badge badge-outline badge-xs">{{ f['status'] }}</span>
               {% endif %}
-            {% else %}—{% endif %}
-          </td>
-          <td>{{ f['completed_at']|relative_time }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </figure>
-  {% else %}
-  <p class="muted" style="text-align:center;padding:20px 0">No activity yet</p>
-  {% endif %}
-</article>
+            </td>
+            <td class="truncate max-w-[200px]"><span class="tooltip tooltip-right" data-tip="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(35) }}</span></td>
+            <td>{{ f['library'] }}</td>
+            <td>{{ f['video_codec'] or '?' }}{% if f['output_codec'] %} <span class="text-base-content/40">&rarr;</span> {{ f['output_codec'] }}{% endif %}</td>
+            <td>
+              {% if f['status'] == 'completed' and f['output_size'] %}
+                {% set delta = f['size'] - f['output_size'] %}
+                {% if delta > 0 %}
+                <span class="text-success text-xs font-medium">-{{ delta|human_size }}</span>
+                {% else %}
+                <span class="text-error text-xs font-medium">+{{ (-delta)|human_size }}</span>
+                {% endif %}
+              {% else %}<span class="text-base-content/30">&mdash;</span>{% endif %}
+            </td>
+            <td class="text-base-content/60 whitespace-nowrap">{{ f['completed_at']|relative_time }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-base-content/40 text-sm text-center py-6">No activity yet</p>
+    {% endif %}
+  </div>
+</div>

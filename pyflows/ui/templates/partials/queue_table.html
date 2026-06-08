@@ -1,18 +1,48 @@
 {% for f in files %}
-<tr>
-  <td title="{{ f['path'] }}"><a href="/ui/files/{{ f['id'] }}">{{ f['path'].split('/')[-1]|truncate(45) }}</a></td>
-  <td>{{ f['library'] }}</td>
-  <td>{{ f['video_codec'] or '—' }}</td>
-  <td>{{ f['size']|human_size }}</td>
-  <td>{{ f['created_at']|relative_time }}</td>
+<tr class="hover">
   <td>
-    <span class="badge badge-{{ f['status'] }}">{{ f['status'] }}</span>
-    {% if f['hold_until'] %}<small class="muted">hold until {{ f['hold_until']|relative_time }}</small>{% endif %}
-    {% if f['next_retry_at'] %}<small class="muted">retry {{ f['next_retry_at']|relative_time }}</small>{% endif %}
+    <a href="/ui/files/{{ f['id'] }}" class="link link-hover" title="{{ f['path'] }}">
+      <kbd class="kbd kbd-sm">{{ f['path'].split('/')[-1]|truncate(45) }}</kbd>
+    </a>
+  </td>
+  <td>{{ f['library'] }}</td>
+  <td>
+    {% if f['video_codec'] %}
+    <span class="badge badge-sm badge-outline">{{ f['video_codec'] }}</span>
+    {% else %}
+    <span class="text-base-content/50">—</span>
+    {% endif %}
+  </td>
+  <td>{{ f['size']|human_size }}</td>
+  <td class="text-sm opacity-70">{{ f['created_at']|relative_time }}</td>
+  <td>
+    {% if f['status'] == 'pending' %}
+    <span class="badge badge-info badge-sm">pending</span>
+    {% elif f['status'] == 'processing' %}
+    <span class="badge badge-warning badge-sm">processing</span>
+    {% elif f['status'] == 'on_hold' %}
+    <span class="badge badge-neutral badge-sm">on hold</span>
+    {% elif f['status'] == 'retry' %}
+    <span class="badge badge-secondary badge-sm">retry</span>
+    {% else %}
+    <span class="badge badge-sm">{{ f['status'] }}</span>
+    {% endif %}
+    {% if f['hold_until'] %}
+    <div class="tooltip" data-tip="Hold until {{ f['hold_until']|relative_time }}">
+      <span class="text-xs opacity-50 ml-1">hold {{ f['hold_until']|relative_time }}</span>
+    </div>
+    {% endif %}
+    {% if f['next_retry_at'] %}
+    <div class="tooltip" data-tip="Retry {{ f['next_retry_at']|relative_time }}">
+      <span class="text-xs opacity-50 ml-1">retry {{ f['next_retry_at']|relative_time }}</span>
+    </div>
+    {% endif %}
   </td>
   <td>
     {% if f['status'] == 'pending' %}
-    <button hx-post="/ui/api/skip" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="delete" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Skip</button>
+    <button class="btn btn-ghost btn-xs"
+            hx-post="/ui/api/skip" hx-vals='{{ {"path": f["path"]}|tojson|e }}'
+            hx-target="closest tr" hx-swap="delete">Skip</button>
     {% endif %}
   </td>
 </tr>
