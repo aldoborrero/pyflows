@@ -13,15 +13,21 @@
             <th>Library</th>
             <th>Codec</th>
             <th>Size</th>
+            <th>Queued</th>
           </tr>
         </thead>
         <tbody>
           {% for f in pending %}
-          <tr>
-            <td class="truncate max-w-[200px]"><span class="tooltip tooltip-right" data-tip="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(40) }}</span></td>
-            <td>{{ f['library'] }}</td>
+          <tr class="hover cursor-pointer" onclick="window.location='/ui/files/{{ f['id'] }}'">
+            <td>
+              <a href="/ui/files/{{ f['id'] }}" class="link link-hover font-medium" title="{{ f['path'] }}">
+                {{ f['path'].split('/')[-1]|truncate(50) }}
+              </a>
+            </td>
+            <td><span class="badge badge-ghost badge-sm">{{ f['library'] }}</span></td>
             <td><span class="badge badge-outline badge-xs">{{ f['video_codec'] or '?' }}</span></td>
-            <td class="text-base-content/60">{{ f['size']|human_size }}</td>
+            <td class="text-base-content/60 text-xs">{{ f['size']|human_size }}</td>
+            <td class="text-base-content/40 text-xs">{{ f['created_at']|relative_time }}</td>
           </tr>
           {% endfor %}
         </tbody>
