@@ -181,12 +181,12 @@ def test_build_encode_command_default_language_fallback(tmp_config):
     assert args[args.index("-disposition:s:0") + 1] == "default"
 
 
-def test_build_encode_command_pipeline1_hevc(tmp_config):
-    """hevc input uses Pipeline 1: -hwaccel flags, no video filter."""
+def test_build_encode_command_pipeline1_vp9(tmp_config):
+    """vp9 input uses Pipeline 1: -hwaccel flags, no video filter."""
     config = load_config(tmp_config)
     profile = config.profiles["test"]
     probe = parse_probe_output(json.dumps({"streams": [
-        {"index": 0, "codec_type": "video", "codec_name": "hevc", "width": 1920, "height": 1080, "tags": {}},
+        {"index": 0, "codec_type": "video", "codec_name": "vp9", "width": 1920, "height": 1080, "tags": {}},
         {"index": 1, "codec_type": "audio", "codec_name": "aac", "channels": 2, "tags": {"language": "eng", "title": ""}},
     ]}))
     cmd = build_encode_command("/media/test.mkv", "/tmp/test.mkv", probe, profile, "/dev/dri/renderD128")
@@ -200,6 +200,23 @@ def test_build_encode_command_pipeline1_hevc(tmp_config):
     assert "-vf" not in args
     assert "hwupload_vaapi" not in args
     assert "-filter_hw_device" not in args
+
+
+def test_build_encode_command_skip_codec_copies_video(tmp_config):
+    """hevc input with skip_codecs=[hevc] uses -c:v copy, not re-encode."""
+    config = load_config(tmp_config)
+    profile = config.profiles["test"]
+    probe = parse_probe_output(json.dumps({"streams": [
+        {"index": 0, "codec_type": "video", "codec_name": "hevc", "width": 1920, "height": 1080, "tags": {}},
+        {"index": 1, "codec_type": "audio", "codec_name": "eac3", "channels": 6, "tags": {"language": "eng", "title": ""}},
+    ]}))
+    cmd = build_encode_command("/media/test.mkv", "/tmp/test.mkv", probe, profile, "/dev/dri/renderD128")
+    args = cmd.build()
+
+    assert "-c:v:0" in args
+    assert args[args.index("-c:v:0") + 1] == "copy"
+    assert "hevc_vaapi" not in args
+    assert "libx265" not in args
 
 
 def test_build_encode_command_pipeline2_h264(tmp_config):

@@ -101,12 +101,15 @@ def build_encode_command_from_plan(
 
     # --- Video ---
     v_idx = cmd.map_stream("0:v:0")
-    codec_name = profile.video.codec
-    if use_vaapi:
+    if plan.video.action == "copy":
+        cmd.set_codec(v_idx, "copy")
+    elif use_vaapi:
+        codec_name = profile.video.codec
         encoder = VAAPI_ENCODERS.get(codec_name, f"{codec_name}_vaapi")
         async_depth = hardware_config.vaapi.async_depth if hardware_config is not None else 4
         cmd.set_codec(v_idx, encoder, qp=profile.video.quality, async_depth=async_depth)
     else:
+        codec_name = profile.video.codec
         encoder = CPU_ENCODERS.get(codec_name, f"lib{codec_name}")
         cmd.set_codec(v_idx, encoder, crf=profile.video.quality, preset="medium")
     cmd.set_metadata(v_idx, "title", "")
