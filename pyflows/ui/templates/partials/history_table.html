@@ -1,7 +1,7 @@
 {% for f in files %}
 <tr>
   <td><span class="badge badge-{{ f['status'] }}">{{ f['status'] }}</span></td>
-  <td title="{{ f['path'] }}"><a href="/ui/files/{{ f['rowid'] }}">{{ f['path'].split('/')[-1]|truncate(45) }}</a></td>
+  <td title="{{ f['path'] }}"><a href="/ui/files/{{ f['id'] }}">{{ f['path'].split('/')[-1]|truncate(45) }}</a></td>
   <td>{{ f['library'] }}</td>
   <td>
     {% if f['status'] == 'completed' %}

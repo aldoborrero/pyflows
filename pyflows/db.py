@@ -20,7 +20,6 @@ def _utcnow_iso() -> str:
 
 class FileRecord(TypedDict, total=False):
     id: int
-    rowid: int
     path: str
     library: str
     profile: str
@@ -413,7 +412,7 @@ class FileDB:
         return list(libs.values())
 
     def get_by_id(self, file_id: int) -> FileRecord | None:
-        cur = self.conn.execute("SELECT rowid, * FROM files WHERE rowid=?", (file_id,))
+        cur = self.conn.execute("SELECT * FROM files WHERE id=?", (file_id,))
         row = cur.fetchone()
         return _row_to_record(row) if row else None
 
@@ -448,7 +447,7 @@ class FileDB:
         if has_retry is True:
             conditions.append("next_retry_at IS NOT NULL AND next_retry_at != ''")
         where = " AND ".join(conditions) if conditions else "1=1"
-        sql = f"SELECT rowid, * FROM files WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        sql = f"SELECT * FROM files WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return _rows_to_records(self.conn.execute(sql, params).fetchall())
 
@@ -468,7 +467,7 @@ class FileDB:
             conditions.append("library=?")
             params.append(library)
         where = " AND ".join(conditions)
-        sql = f"SELECT rowid, * FROM files WHERE {where} ORDER BY completed_at DESC LIMIT ? OFFSET ?"
+        sql = f"SELECT * FROM files WHERE {where} ORDER BY completed_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return _rows_to_records(self.conn.execute(sql, params).fetchall())
 

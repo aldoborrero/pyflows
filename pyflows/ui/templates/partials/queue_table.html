@@ -1,6 +1,6 @@
 {% for f in files %}
 <tr>
-  <td title="{{ f['path'] }}"><a href="/ui/files/{{ f['rowid'] }}">{{ f['path'].split('/')[-1]|truncate(45) }}</a></td>
+  <td title="{{ f['path'] }}"><a href="/ui/files/{{ f['id'] }}">{{ f['path'].split('/')[-1]|truncate(45) }}</a></td>
   <td>{{ f['library'] }}</td>
   <td>{{ f['video_codec'] or '—' }}</td>
   <td>{{ f['size']|human_size }}</td>
