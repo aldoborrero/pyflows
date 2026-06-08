@@ -6,7 +6,7 @@ from pyflows.config import load_config
 from pyflows.db import FileDB, FileStatus, compute_file_hash
 from pyflows import tasks
 from pyflows.tasks import (
-    _do_release_held_files,
+    _release_held_files,
     _handle_encode_failure,
     _handle_encode_success,
     _is_transient_error,
@@ -59,7 +59,7 @@ def test_release_held_files_queues_stable_file(tmp_config) -> None:
         hold_until = datetime.now(timezone.utc) - timedelta(seconds=1)
         db.record_file_event(str(media_file), "Test Library", "test", media_file.stat().st_size, observed_mtime, hold_until)
 
-    _do_release_held_files()
+    _release_held_files()
 
     assert queued == [(str(media_file), "test")]
     with FileDB(config.general.db_path) as db:
@@ -128,7 +128,7 @@ def test_disk_space_error_triggers_retry(tmp_config) -> None:
         db.update_status("/media/test.mkv", FileStatus.PROCESSING)
 
         notifier = MagicMock()
-        _handle_encode_failure(db, "/media/test.mkv", "Insufficient disk space",
+        _handle_encode_failure(db, "/media/test.mkv", "Insufficient disk space", True,
                                "test", config, notifier)
 
         record = db.get("/media/test.mkv")
@@ -139,7 +139,7 @@ def test_disk_space_error_triggers_retry(tmp_config) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tests for the decomposed _do_encode helpers
+# Tests for the decomposed _encode_file helpers
 # ---------------------------------------------------------------------------
 
 
@@ -201,7 +201,7 @@ def test_handle_encode_failure_transient_schedules_retry(tmp_config) -> None:
     with FileDB(config.general.db_path) as db:
         _setup_processing_file(db, file_path)
 
-        _handle_encode_failure(db, file_path, "Insufficient disk space", "test", config, notifier)
+        _handle_encode_failure(db, file_path, "Insufficient disk space", True, "test", config, notifier)
 
         record = db.get(file_path)
         assert record is not None
@@ -220,7 +220,7 @@ def test_handle_encode_failure_terminal_marks_failed(tmp_config) -> None:
     with FileDB(config.general.db_path) as db:
         _setup_processing_file(db, file_path)
 
-        _handle_encode_failure(db, file_path, "unsupported codec", "test", config, notifier)
+        _handle_encode_failure(db, file_path, "unsupported codec", False, "test", config, notifier)
 
         record = db.get(file_path)
         assert record is not None
@@ -243,7 +243,7 @@ def test_handle_encode_failure_exhausted_retries_marks_failed(tmp_config) -> Non
         db.schedule_retry(file_path, "previous error", config.general.max_retries, next_retry)
         db.update_status(file_path, FileStatus.PROCESSING)
 
-        _handle_encode_failure(db, file_path, "Insufficient disk space", "test", config, notifier)
+        _handle_encode_failure(db, file_path, "Insufficient disk space", True, "test", config, notifier)
 
         record = db.get(file_path)
         assert record is not None

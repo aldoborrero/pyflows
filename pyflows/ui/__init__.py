@@ -10,12 +10,13 @@ from pyflows.db import FileDB, FileStatus
 from pyflows.ffmpeg import get_current_progress
 
 
-def _human_size(size_bytes: int) -> str:
+def _human_size(size_bytes: int | float) -> str:
+    value = float(size_bytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(size_bytes) < 1024:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024  # type: ignore[assignment]
-    return f"{size_bytes:.1f} PB"
+        if abs(value) < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} PB"
 
 
 def _relative_time(iso_str: str | None) -> str:

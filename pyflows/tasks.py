@@ -104,15 +104,15 @@ def _register_tasks() -> Callable[..., Any]:
 
     @huey.periodic_task(EVERY_MINUTE)  # type: ignore[untyped-decorator]
     def scan_all() -> None:
-        _do_scan_all(respect_schedule=True)
+        _scan_all(respect_schedule=True)
 
     @huey.periodic_task(EVERY_MINUTE)  # type: ignore[untyped-decorator]
     def release_held_files() -> None:
-        _do_release_held_files()
+        _release_held_files()
 
     @huey.task()  # type: ignore[untyped-decorator]
     def encode(file_path: str, profile_name: str) -> None:
-        _do_encode(file_path, profile_name)
+        _encode_file(file_path, profile_name)
 
     _encode_task = encode
 
@@ -151,7 +151,7 @@ def _scan_library_if_due(db: FileDB, lib: LibraryConfig, respect_schedule: bool)
         _encode_task(file_path, profile)
 
 
-def _do_scan_all(respect_schedule: bool = False) -> None:
+def _scan_all(respect_schedule: bool = False) -> None:
     """Scan all libraries and queue encode tasks for new/changed files."""
     if not _scanning_enabled.is_set():
         return
@@ -166,7 +166,7 @@ def _is_transient_error(error: str) -> bool:
     return any(marker in lowered for marker in _TRANSIENT_ERROR_MARKERS)
 
 
-def _do_release_held_files() -> None:
+def _release_held_files() -> None:
     config = _get_config()
     now = datetime.now(timezone.utc)
     with FileDB(config.general.db_path) as db:
@@ -274,6 +274,7 @@ def _handle_encode_failure(
     db: FileDB,
     file_path: str,
     error: str,
+    transient: bool,
     profile_name: str,
     config: PyflowsConfig,
     notifier: Notifier,
@@ -281,7 +282,7 @@ def _handle_encode_failure(
     """Schedule a retry for transient errors or mark the file as permanently failed."""
     retry_count, _ = db.get_retry_info(file_path)
     next_retry_count = retry_count + 1
-    if _is_transient_error(error) and retry_count < config.general.max_retries:
+    if transient and retry_count < config.general.max_retries:
         delay = int(config.general.retry_backoff_seconds * (2 ** retry_count) * random.uniform(0.5, 1.5))
         next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
         db.schedule_retry(file_path, error, next_retry_count, next_retry_at)
@@ -296,8 +297,8 @@ def _handle_encode_failure(
         log_event(
             log, logging.ERROR, "encode_failed", "Failed file encode",
             file_path=file_path, profile=profile_name, reason=error,
-            retry_count=next_retry_count if _is_transient_error(error) else retry_count,
-            terminal=not _is_transient_error(error) or retry_count >= config.general.max_retries,
+            retry_count=next_retry_count if transient else retry_count,
+            terminal=not transient or retry_count >= config.general.max_retries,
         )
         notifier.on_failure(file_path, error)
         run_hooks(config.hooks.on_failure, "on_failure", file_path,
@@ -305,7 +306,7 @@ def _handle_encode_failure(
                   timeout=config.hooks.timeout)
 
 
-def _do_encode(file_path: str, profile_name: str) -> None:
+def _encode_file(file_path: str, profile_name: str) -> None:
     """Encode a single file using its profile.
 
     Before starting, checks whether a higher-priority pending file exists in
@@ -381,7 +382,7 @@ def _do_encode(file_path: str, profile_name: str) -> None:
             _handle_encode_success(db, file_path, result.final_path,
                                    profile_name, profile, notifier, config)
         else:
-            _handle_encode_failure(db, file_path, result.error,
+            _handle_encode_failure(db, file_path, result.error, result.transient,
                                    profile_name, config, notifier)
 
 
@@ -511,7 +512,7 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
         observer.start()
 
         # Run initial scan
-        _do_scan_all(respect_schedule=False)
+        _scan_all(respect_schedule=False)
 
     # Start Huey consumer in current thread (blocks)
     shutdown = threading.Event()

@@ -32,6 +32,7 @@ class EncodeResult:
     status: EncodeStatus
     final_path: str
     error: str = ""
+    transient: bool = False
 
 
 # Codec to encoder mapping
@@ -239,7 +240,7 @@ def encode_file(
     # Disk space check
     input_size = Path(input_path).stat().st_size
     if not check_disk_space(temp_dir, input_size):
-        return EncodeResult(EncodeStatus.FAILED, input_path, "Insufficient disk space")
+        return EncodeResult(EncodeStatus.FAILED, input_path, "Insufficient disk space", transient=True)
 
     # Build temp output path
     output_ext = _container_suffix(profile)
@@ -306,7 +307,7 @@ def encode_file(
         except OSError as exc:
             if exc.errno != errno.EXDEV:
                 Path(output_path).unlink(missing_ok=True)
-                return EncodeResult(EncodeStatus.FAILED, input_path, f"Failed to replace original: {exc}")
+                return EncodeResult(EncodeStatus.FAILED, input_path, f"Failed to replace original: {exc}", transient=True)
             target_dir = Path(target_path).parent
             tmp_path = str(target_dir / f".{Path(target_path).name}.tmp")
             try:
@@ -315,7 +316,7 @@ def encode_file(
             except OSError as copy_exc:
                 Path(tmp_path).unlink(missing_ok=True)
                 Path(output_path).unlink(missing_ok=True)
-                return EncodeResult(EncodeStatus.FAILED, input_path, f"Failed to replace original: {copy_exc}")
+                return EncodeResult(EncodeStatus.FAILED, input_path, f"Failed to replace original: {copy_exc}", transient=True)
             except BaseException:
                 Path(tmp_path).unlink(missing_ok=True)
                 raise
