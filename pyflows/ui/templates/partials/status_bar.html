@@ -1,34 +1,8 @@
-<div class="stats stats-horizontal shadow bg-base-200 text-sm">
-  <div class="stat px-4 py-2">
-    <div class="stat-title text-xs">Pending</div>
-    <div class="stat-value text-lg text-info">{{ counts.pending }}</div>
-  </div>
-  {% if counts.processing %}
-  <div class="stat px-4 py-2">
-    <div class="stat-title text-xs">Encoding</div>
-    <div class="stat-value text-lg text-warning">{{ counts.processing }}</div>
-  </div>
-  {% endif %}
-  <div class="stat px-4 py-2">
-    <div class="stat-title text-xs">Completed</div>
-    <div class="stat-value text-lg text-success">{{ counts.completed }}</div>
-  </div>
-  {% if counts.failed %}
-  <div class="stat px-4 py-2">
-    <div class="stat-title text-xs">Failed</div>
-    <div class="stat-value text-lg text-error">{{ counts.failed }}</div>
-  </div>
-  {% endif %}
-  {% if counts.skipped %}
-  <div class="stat px-4 py-2">
-    <div class="stat-title text-xs">Skipped</div>
-    <div class="stat-value text-lg text-base-content/60">{{ counts.skipped }}</div>
-  </div>
-  {% endif %}
-  {% if saved %}
-  <div class="stat px-4 py-2">
-    <div class="stat-title text-xs">Saved</div>
-    <div class="stat-value text-lg text-success">{{ saved|human_size }}</div>
-  </div>
-  {% endif %}
+<div class="flex gap-2 flex-wrap items-center">
+  <div class="badge badge-info gap-1 badge-lg">{{ counts.pending }} pending</div>
+  {% if counts.processing %}<div class="badge badge-warning gap-1 badge-lg animate-pulse-processing">{{ counts.processing }} encoding</div>{% endif %}
+  <div class="badge badge-success gap-1 badge-lg">{{ counts.completed }} completed</div>
+  {% if counts.failed %}<div class="badge badge-error gap-1 badge-lg">{{ counts.failed }} failed</div>{% endif %}
+  {% if counts.skipped %}<div class="badge badge-ghost gap-1 badge-lg">{{ counts.skipped }} skipped</div>{% endif %}
+  {% if saved %}<div class="badge badge-accent gap-1 badge-lg">{{ saved|human_size }} saved</div>{% endif %}
 </div>
