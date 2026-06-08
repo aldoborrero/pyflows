@@ -1,25 +1,26 @@
 <article>
-  <header>Queue ({{ pending|length }} pending)</header>
+  <header>Queue ({{ pending|length }} next)
+    <a href="/ui/queue" style="float:right;font-size:1em;text-transform:none;letter-spacing:0">View all &rarr;</a>
+  </header>
   {% if pending %}
   <figure>
     <table role="grid">
       <thead>
-        <tr><th>File</th><th>Library</th><th>Codec</th><th>Size</th><th>Queued</th></tr>
+        <tr><th>File</th><th>Library</th><th>Codec</th><th>Size</th></tr>
       </thead>
       <tbody>
         {% for f in pending %}
         <tr>
           <td title="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(40) }}</td>
           <td>{{ f['library'] }}</td>
-          <td>{{ f['video_codec'] or '—' }}</td>
+          <td>{{ f['video_codec'] or '?' }}</td>
           <td>{{ f['size']|human_size }}</td>
-          <td>{{ f['created_at']|relative_time }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </figure>
   {% else %}
-  <p class="muted">Queue is empty</p>
+  <p class="muted" style="text-align:center;padding:20px 0">Queue is empty</p>
   {% endif %}
 </article>

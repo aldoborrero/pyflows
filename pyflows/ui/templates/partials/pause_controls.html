@@ -1,14 +1,14 @@
-<div id="pause-controls" role="group" style="margin-bottom:16px">
+<div id="pause-controls" role="group" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
   {% for component in ['scanning', 'encoding', 'watcher'] %}
   {% if pause_state[component] %}
   <button hx-post="/ui/api/pause/{{ component }}" hx-target="#pause-controls" hx-swap="outerHTML"
           class="outline" style="padding:4px 12px;font-size:0.85em">
-    Pause {{ component|capitalize }}
+    &#9654; {{ component|capitalize }}
   </button>
   {% else %}
   <button hx-post="/ui/api/resume/{{ component }}" hx-target="#pause-controls" hx-swap="outerHTML"
-          class="contrast" style="padding:4px 12px;font-size:0.85em">
-    Resume {{ component|capitalize }}
+          class="outline secondary" style="padding:4px 12px;font-size:0.85em;opacity:0.7">
+    &#9646;&#9646; {{ component|capitalize }}
   </button>
   {% endif %}
   {% endfor %}

@@ -1,20 +1,22 @@
 <article>
-  <header>Recent Completions</header>
+  <header>Recent Activity
+    <a href="/ui/history" style="float:right;font-size:1em;text-transform:none;letter-spacing:0">View all &rarr;</a>
+  </header>
   {% if history %}
   <figure>
     <table role="grid">
       <thead>
-        <tr><th>File</th><th>Library</th><th>Codec</th><th>Saved</th><th>When</th></tr>
+        <tr><th>Status</th><th>File</th><th>Library</th><th>Codec</th><th>Saved</th><th>When</th></tr>
       </thead>
       <tbody>
         {% for f in history %}
-        {% if f['status'] == 'completed' %}
         <tr>
-          <td title="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(40) }}</td>
+          <td><span class="badge badge-{{ f['status'] }}" style="font-size:0.75em;padding:2px 8px">{{ f['status'] }}</span></td>
+          <td title="{{ f['path'] }}">{{ f['path'].split('/')[-1]|truncate(35) }}</td>
           <td>{{ f['library'] }}</td>
-          <td>{{ f['video_codec'] or '?' }} &rarr; {{ f['output_codec'] or '?' }}</td>
+          <td>{{ f['video_codec'] or '?' }}{% if f['output_codec'] %} &rarr; {{ f['output_codec'] }}{% endif %}</td>
           <td>
-            {% if f['output_size'] %}
+            {% if f['status'] == 'completed' and f['output_size'] %}
               {% set delta = f['size'] - f['output_size'] %}
               {% if delta > 0 %}
               <span class="saved-positive">-{{ delta|human_size }}</span>
@@ -25,12 +27,11 @@
           </td>
           <td>{{ f['completed_at']|relative_time }}</td>
         </tr>
-        {% endif %}
         {% endfor %}
       </tbody>
     </table>
   </figure>
   {% else %}
-  <p class="muted">No completed encodes yet</p>
+  <p class="muted" style="text-align:center;padding:20px 0">No activity yet</p>
   {% endif %}
 </article>

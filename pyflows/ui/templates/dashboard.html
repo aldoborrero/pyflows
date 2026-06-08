@@ -9,16 +9,20 @@
 
   {% include "partials/pause_controls.html" %}
 
-  <div id="encode-card" sse-swap="encode-progress" hx-swap="innerHTML">
-    {% include "partials/encode_progress.html" %}
+  <div style="display:grid;grid-template-columns:1fr;gap:16px">
+    <div id="encode-card" sse-swap="encode-progress" hx-swap="innerHTML">
+      {% include "partials/encode_progress.html" %}
+    </div>
   </div>
 
-  <div id="queue-preview" sse-swap="queue-summary" hx-swap="innerHTML">
-    {% include "partials/queue_preview.html" %}
-  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+    <div id="queue-preview" sse-swap="queue-summary" hx-swap="innerHTML">
+      {% include "partials/queue_preview.html" %}
+    </div>
 
-  <div id="failed-table" sse-swap="failed-update" hx-swap="innerHTML">
-    {% include "partials/failed_table.html" %}
+    <div id="failed-table" sse-swap="failed-update" hx-swap="innerHTML">
+      {% include "partials/failed_table.html" %}
+    </div>
   </div>
 
   <div id="recent-completions" sse-swap="completions-update" hx-swap="innerHTML">

@@ -3,11 +3,16 @@
   {% if progress.file_path %}
   <p><strong>{{ progress.file_path.split('/')[-1] }}</strong></p>
   {% if processing %}
-  <p class="muted">{{ processing['library'] }} &middot; {{ processing['video_codec'] or '?' }} &rarr; {{ processing['profile'] }}</p>
+  <p class="muted">{{ processing['library'] }} &middot; {{ processing['video_codec'] or '?' }} &rarr; hevc</p>
   {% endif %}
   <progress value="{{ progress.out_time_us }}" max="{{ progress.out_time_us + 1 }}"></progress>
-  <p>Speed: <strong>{{ "%.1f"|format(progress.speed) }}x</strong></p>
+  <div style="display:flex;gap:16px;flex-wrap:wrap">
+    <span>Speed: <strong>{{ "%.1f"|format(progress.speed) }}x</strong></span>
+    {% if processing %}
+    <span>Size: <strong>{{ processing['size']|human_size }}</strong></span>
+    {% endif %}
+  </div>
   {% else %}
-  <p class="muted">No active encode</p>
+  <p class="muted">Idle — no active encode</p>
   {% endif %}
 </article>

@@ -1,8 +1,8 @@
-<div role="group">
-  <span class="badge badge-pending" data-tooltip="Pending">{{ counts.pending }}</span>
-  <span class="badge badge-processing" data-tooltip="Processing">{{ counts.processing }}</span>
-  <span class="badge badge-completed" data-tooltip="Completed">{{ counts.completed }}</span>
-  <span class="badge badge-failed" data-tooltip="Failed">{{ counts.failed }}</span>
-  <span class="badge badge-skipped" data-tooltip="Skipped">{{ counts.skipped }}</span>
-  <span class="badge badge-saved" data-tooltip="Space saved">{{ saved|human_size }}</span>
+<div role="group" style="display:flex;gap:8px;flex-wrap:wrap">
+  <span class="badge badge-pending">{{ counts.pending }} pending</span>
+  {% if counts.processing %}<span class="badge badge-processing">{{ counts.processing }} encoding</span>{% endif %}
+  <span class="badge badge-completed">{{ counts.completed }} completed</span>
+  {% if counts.failed %}<span class="badge badge-failed">{{ counts.failed }} failed</span>{% endif %}
+  {% if counts.skipped %}<span class="badge badge-skipped">{{ counts.skipped }} skipped</span>{% endif %}
+  {% if saved %}<span class="badge badge-saved">{{ saved|human_size }} saved</span>{% endif %}
 </div>
