@@ -14,14 +14,12 @@
     {% include "partials/encode_progress.html" %}
   </div>
 
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-    <div id="queue-preview" sse-swap="queue-summary" hx-swap="innerHTML">
-      {% include "partials/queue_preview.html" %}
-    </div>
+  <div id="queue-preview" sse-swap="queue-summary" hx-swap="innerHTML">
+    {% include "partials/queue_preview.html" %}
+  </div>
 
-    <div id="failed-table" sse-swap="failed-update" hx-swap="innerHTML">
-      {% include "partials/failed_table.html" %}
-    </div>
+  <div id="failed-table" sse-swap="failed-update" hx-swap="innerHTML">
+    {% include "partials/failed_table.html" %}
   </div>
 
   <div id="recent-completions" sse-swap="completions-update" hx-swap="innerHTML">
