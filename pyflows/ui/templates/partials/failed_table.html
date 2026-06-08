@@ -2,7 +2,10 @@
 <article>
   <header>
     Failed ({{ failed|length }})
-    <button hx-post="/ui/api/retry-all" hx-target="#failed-table" hx-swap="innerHTML" hx-confirm="Retry all failed files?" class="outline secondary" style="float:right;padding:4px 12px;font-size:0.85em">Retry All</button>
+    <span style="float:right">
+      <button hx-post="/ui/api/delete-failed" hx-target="#failed-table" hx-swap="innerHTML" hx-confirm="Delete all {{ failed|length }} failed records?" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Clear All</button>
+      <button hx-post="/ui/api/retry-all" hx-target="#failed-table" hx-swap="innerHTML" hx-confirm="Retry all failed files?" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Retry All</button>
+    </span>
   </header>
   <figure>
     <table role="grid">
@@ -16,7 +19,10 @@
           <td>{{ f['library'] }}</td>
           <td><details><summary>{{ f['error']|truncate(50) }}</summary>{{ f['error'] }}</details></td>
           <td>{{ f['completed_at']|relative_time }}</td>
-          <td><button hx-post="/ui/api/retry" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Retry</button></td>
+          <td>
+            <button hx-post="/ui/api/retry" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="outerHTML" class="outline" style="padding:4px 12px;font-size:0.85em">Retry</button>
+            <button hx-post="/ui/api/delete" hx-vals='{{ {"path": f["path"]}|tojson|e }}' hx-target="closest tr" hx-swap="delete" class="outline secondary" style="padding:4px 12px;font-size:0.85em">Delete</button>
+          </td>
         </tr>
         {% endfor %}
       </tbody>

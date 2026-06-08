@@ -350,6 +350,18 @@ class FileDB:
         self.conn.commit()
         return cur.rowcount
 
+    def delete_failed(self) -> int:
+        """Delete all failed file records."""
+        cur = self.conn.execute("DELETE FROM files WHERE status=?", (FileStatus.FAILED,))
+        self.conn.commit()
+        return cur.rowcount
+
+    def delete_file(self, path: str) -> bool:
+        """Delete a single file record."""
+        cur = self.conn.execute("DELETE FROM files WHERE path=?", (path,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def reencode(self, path: str) -> bool:
         """Reset a completed or skipped file to pending for re-encoding."""
         cur = self.conn.execute(

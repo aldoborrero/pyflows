@@ -67,6 +67,10 @@ class UIHandlerMixin:
             self._handle_reencode(body)
         elif self.path == "/ui/api/scan":
             self._handle_scan(body)
+        elif self.path == "/ui/api/delete-failed":
+            self._handle_delete_failed()
+        elif self.path == "/ui/api/delete":
+            self._handle_delete(body)
         elif self.path.startswith("/ui/api/pause/"):
             self._handle_pause(False)
         elif self.path.startswith("/ui/api/resume/"):
@@ -230,6 +234,26 @@ class UIHandlerMixin:
         else:
             html = self.ui_renderer.render_partial_failed_table()
         self._respond_html(200, html)
+
+    def _handle_delete_failed(self) -> None:
+        with FileDB(self.config.general.db_path) as db:
+            count = db.delete_failed()
+        if self.ui_renderer:
+            self._respond_html(200, self.ui_renderer.render_partial_failed_table())
+        else:
+            self._respond(200, {"deleted": count})
+
+    def _handle_delete(self, body: bytes) -> None:
+        params = urllib.parse.parse_qs(body.decode())
+        path = params.get("path", [""])[0]
+        if not path:
+            self._respond(400, {"error": "missing path"})
+            return
+        with FileDB(self.config.general.db_path) as db:
+            if db.delete_file(path):
+                self._respond_html(200, "")
+            else:
+                self._respond(404, {"error": "not found"})
 
     def _handle_skip(self, body: bytes) -> None:
         params = urllib.parse.parse_qs(body.decode())
