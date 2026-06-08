@@ -12,7 +12,8 @@ if TYPE_CHECKING:
     from pyflows.ui import UIRenderer
 
 
-type JsonResponse = dict[str, str | int | None]
+from typing import Union
+JsonResponse = dict[str, Union[str, int, None]]
 
 
 class UIHandlerMixin:

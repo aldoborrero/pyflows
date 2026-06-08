@@ -15,8 +15,9 @@ from pyflows.ui.handlers import UIHandlerMixin
 
 log = logging.getLogger(__name__)
 
-type WebhookPayload = dict[str, object]
-type JsonResponse = dict[str, str | int | None]
+from typing import Union
+WebhookPayload = dict[str, object]
+JsonResponse = dict[str, Union[str, int, None]]
 
 
 def _map_path(path: str, mappings: dict[str, str]) -> str:

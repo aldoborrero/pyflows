@@ -8,7 +8,8 @@ import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-type ConfigValue = str | dict[str, "ConfigValue"] | list["ConfigValue"] | int | float | bool | None
+from typing import Union
+ConfigValue = Union[str, dict[str, "ConfigValue"], list["ConfigValue"], int, float, bool, None]
 
 
 def expand_env_vars(value: ConfigValue) -> ConfigValue:

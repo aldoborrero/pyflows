@@ -7,8 +7,9 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-# FFmpeg option values: strings like "128k" or ints like 22
-type FfmpegOptValue = str | int | float
+from typing import Union
+
+FfmpegOptValue = Union[str, int, float]
 
 from pyflows.config import HardwareConfig
 
