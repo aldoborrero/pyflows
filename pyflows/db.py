@@ -10,6 +10,14 @@ from types import TracebackType
 from typing import TypedDict
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utcnow_iso() -> str:
+    return _utcnow().isoformat()
+
+
 class FileRecord(TypedDict, total=False):
     id: int
     rowid: int
@@ -125,7 +133,7 @@ class FileDB:
                failed_retry_hours: int = 24) -> bool:
         """Insert or update a file record. Returns True if the file needs processing."""
         existing = self.get(path)
-        now_dt = datetime.now(timezone.utc)
+        now_dt = _utcnow()
         now = now_dt.isoformat()
 
         if existing is None:
@@ -238,7 +246,7 @@ class FileDB:
 
     def update_status(self, path: str, status: FileStatus, error: str = "",
                       output_codec: str = "", output_size: int = 0) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = _utcnow_iso()
         current = self.get(path)
         if current is not None:
             current_status = FileStatus(current["status"])
@@ -484,7 +492,7 @@ class FileDB:
     def skip_file(self, path: str) -> bool:
         cur = self.conn.execute(
             "UPDATE files SET status=?, completed_at=? WHERE path=? AND status=?",
-            (FileStatus.SKIPPED, datetime.now(timezone.utc).isoformat(), path, FileStatus.PENDING),
+            (FileStatus.SKIPPED, _utcnow_iso(), path, FileStatus.PENDING),
         )
         self.conn.commit()
         return cur.rowcount > 0
@@ -506,12 +514,11 @@ class FileDB:
         if row is None:
             return True
         last_scan = datetime.fromisoformat(row["last_scan_at"])
-        now = datetime.now(timezone.utc)
-        return now - last_scan >= timedelta(seconds=interval_seconds)
+        return _utcnow() - last_scan >= timedelta(seconds=interval_seconds)
 
     def record_library_scan(self, library: str) -> None:
         """Persist the latest scan timestamp for a library."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = _utcnow_iso()
         self.conn.execute(
             "INSERT INTO library_scans (library, last_scan_at) VALUES (?, ?) "
             "ON CONFLICT(library) DO UPDATE SET last_scan_at=excluded.last_scan_at",
@@ -529,7 +536,7 @@ class FileDB:
         hold_until: datetime,
     ) -> None:
         """Persist watcher/scan event state so processing can be deferred until stable."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = _utcnow_iso()
         existing = self.get(path)
         if existing is None:
             self.conn.execute(

@@ -22,8 +22,32 @@ STDERR_TAIL_BYTES = 1000
 _OUT_TIME_US_PREFIX = b"out_time_us="
 _SPEED_PREFIX = b"speed="
 
-_active_proc: subprocess.Popen | None = None  # type: ignore[type-arg]
-_active_proc_lock = threading.Lock()
+class _ActiveProcess:
+    """Thread-safe holder for the currently running ffmpeg process."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: subprocess.Popen | None = None  # type: ignore[type-arg]
+
+    def set(self, proc: subprocess.Popen) -> None:  # type: ignore[type-arg]
+        with self._lock:
+            self._proc = proc
+
+    def clear(self) -> None:
+        with self._lock:
+            self._proc = None
+
+    def terminate(self) -> None:
+        with self._lock:
+            proc = self._proc
+        if proc is not None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+
+_active_process = _ActiveProcess()
 
 
 @dataclass
@@ -35,32 +59,37 @@ class EncodeProgress:
     file_path: str = ""
 
 
-_current_progress = EncodeProgress()
-_progress_data_lock = threading.Lock()
+class ProgressTracker:
+    """Thread-safe tracker for the active ffmpeg encode progress."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._progress = EncodeProgress()
+
+    def get(self) -> EncodeProgress:
+        with self._lock:
+            return EncodeProgress(
+                out_time_us=self._progress.out_time_us,
+                speed=self._progress.speed,
+                file_path=self._progress.file_path,
+            )
+
+    def update(self, file_path: str, out_time_us: int, speed: float) -> None:
+        with self._lock:
+            self._progress.file_path = file_path
+            self._progress.out_time_us = out_time_us
+            self._progress.speed = speed
+
+    def clear(self) -> None:
+        with self._lock:
+            self._progress = EncodeProgress()
+
+
+_progress_tracker = ProgressTracker()
 
 
 def get_current_progress() -> EncodeProgress:
-    """Return a copy of the current encode progress."""
-    with _progress_data_lock:
-        return EncodeProgress(
-            out_time_us=_current_progress.out_time_us,
-            speed=_current_progress.speed,
-            file_path=_current_progress.file_path,
-        )
-
-
-def _set_progress(file_path: str, out_time_us: int, speed: float) -> None:
-    with _progress_data_lock:
-        _current_progress.file_path = file_path
-        _current_progress.out_time_us = out_time_us
-        _current_progress.speed = speed
-
-
-def _clear_progress() -> None:
-    with _progress_data_lock:
-        _current_progress.file_path = ""
-        _current_progress.out_time_us = 0
-        _current_progress.speed = 0.0
+    return _progress_tracker.get()
 
 
 # Default codecs where VAAPI hardware decode is confirmed reliable on AMD/Mesa.
@@ -256,12 +285,10 @@ class FFmpegCommand:
                 env=env,
             )
 
-            global _active_proc
-            with _active_proc_lock:
-                _active_proc = proc
+            _active_process.set(proc)
 
             input_path = self._inputs[0][0] if self._inputs else ""
-            _set_progress(input_path, 0, 0.0)
+            _progress_tracker.update(input_path, 0, 0.0)
 
             # Track progress from stdout in a background thread.
             # Stall clock starts only after the first progress line is received,
@@ -284,7 +311,7 @@ class FFmpegCommand:
                                     if value > last_out_time_us:
                                         last_out_time_us = value
                                         last_progress_time = time.monotonic()
-                                _set_progress(input_path, value, current_speed)
+                                _progress_tracker.update(input_path, value, current_speed)
                             except ValueError:
                                 pass
                         elif line.startswith(_SPEED_PREFIX):
@@ -342,9 +369,8 @@ class FFmpegCommand:
                     reason = f"[STARTUP TIMEOUT: no progress output for {startup_timeout}s]"
                 else:
                     reason = f"[STALL detected: no progress for {stall_timeout}s]"
-                with _active_proc_lock:
-                    _active_proc = None
-                _clear_progress()
+                _active_process.clear()
+                _progress_tracker.clear()
                 return subprocess.CompletedProcess(
                     args=args, returncode=-1, stdout="",
                     stderr=f"{reason} {tail}",
@@ -354,9 +380,8 @@ class FFmpegCommand:
             stderr_file.seek(max(0, pos - STDERR_TAIL_BYTES))
             stderr_tail = stderr_file.read().decode("utf-8", errors="replace")
 
-        with _active_proc_lock:
-            _active_proc = None
-        _clear_progress()
+        _active_process.clear()
+        _progress_tracker.clear()
         return subprocess.CompletedProcess(
             args=args, returncode=proc.returncode, stdout="", stderr=stderr_tail,
         )
@@ -368,10 +393,4 @@ def terminate_active_encode() -> None:
     Called during daemon shutdown so SIGTERM is not blocked waiting for
     a long-running encode to finish on its own.
     """
-    with _active_proc_lock:
-        proc = _active_proc
-    if proc is not None:
-        try:
-            proc.terminate()
-        except OSError:
-            pass
+    _active_process.terminate()
