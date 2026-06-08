@@ -7,6 +7,41 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import TracebackType
+from typing import TypedDict
+
+
+class FileRecord(TypedDict, total=False):
+    id: int
+    rowid: int
+    path: str
+    library: str
+    profile: str
+    file_hash: str
+    size: int
+    status: str
+    video_codec: str | None
+    output_codec: str | None
+    output_size: int | None
+    error: str | None
+    retry_count: int
+    next_retry_at: str | None
+    hold_until: str | None
+    last_seen_at: str | None
+    last_observed_size: int | None
+    last_observed_mtime: str | None
+    arr_source: str | None
+    arr_id: int | None
+    created_at: str
+    started_at: str | None
+    completed_at: str | None
+
+
+def _row_to_record(row: sqlite3.Row) -> FileRecord:
+    return dict(row)  # type: ignore[return-value]
+
+
+def _rows_to_records(rows: list[sqlite3.Row]) -> list[FileRecord]:
+    return [_row_to_record(r) for r in rows]
 
 
 class FileStatus(enum.StrEnum):
@@ -141,17 +176,17 @@ class FileDB:
 
         return False
 
-    def get(self, path: str) -> sqlite3.Row | None:
+    def get(self, path: str) -> FileRecord | None:
         cur = self.conn.execute("SELECT * FROM files WHERE path=?", (path,))
-        row: sqlite3.Row | None = cur.fetchone()
-        return row
+        row = cur.fetchone()
+        return _row_to_record(row) if row else None
 
-    def get_by_status(self, status: FileStatus, limit: int = 100) -> list[sqlite3.Row]:
+    def get_by_status(self, status: FileStatus, limit: int = 100) -> list[FileRecord]:
         cur = self.conn.execute(
             "SELECT * FROM files WHERE status=? ORDER BY created_at LIMIT ?",
             (status, limit),
         )
-        return cur.fetchall()
+        return _rows_to_records(cur.fetchall())
 
     def count_by_status(self, status: FileStatus) -> int:
         cur = self.conn.execute("SELECT count(*) FROM files WHERE status=?", (status,))
@@ -161,7 +196,7 @@ class FileDB:
         self,
         now: datetime | None = None,
         priority_codecs: list[str] | None = None,
-    ) -> sqlite3.Row | None:
+    ) -> FileRecord | None:
         """Return the highest-priority pending file ready for encoding.
 
         Within each tier files are ordered by created_at (FIFO).
@@ -198,7 +233,8 @@ class FileDB:
             params = (now_iso, now_iso)
 
         cur = self.conn.execute(query, params)
-        return cur.fetchone()
+        row = cur.fetchone()
+        return _row_to_record(row) if row else None
 
     def update_status(self, path: str, status: FileStatus, error: str = "",
                       output_codec: str = "", output_size: int = 0) -> None:
@@ -232,7 +268,7 @@ class FileDB:
         )
         self.conn.commit()
 
-    def get_pending_without_codec(self) -> list[sqlite3.Row]:
+    def get_pending_without_codec(self) -> list[FileRecord]:
         """Return pending files whose video_codec has not been populated yet.
 
         Used at startup to backfill codec data for files that were queued
@@ -243,7 +279,7 @@ class FileDB:
             "SELECT path FROM files WHERE status = 'pending' "
             "AND (video_codec IS NULL OR video_codec = '')",
         )
-        return cur.fetchall()
+        return _rows_to_records(cur.fetchall())
 
     def update_hash(self, path: str, file_hash: str, size: int) -> None:
         """Update the file hash and size after encoding (prevents watcher re-queue)."""
@@ -317,14 +353,14 @@ class FileDB:
         self.conn.commit()
         return cur.rowcount > 0
 
-    def get_history(self, limit: int = 100) -> list[sqlite3.Row]:
+    def get_history(self, limit: int = 100) -> list[FileRecord]:
         """Return recent completed/failed/skipped records sorted by completed_at DESC."""
         cur = self.conn.execute(
             "SELECT * FROM files WHERE status IN (?, ?, ?) "
             "ORDER BY completed_at DESC LIMIT ?",
             (FileStatus.COMPLETED, FileStatus.FAILED, FileStatus.SKIPPED, limit),
         )
-        return cur.fetchall()
+        return _rows_to_records(cur.fetchall())
 
     def all_status_counts(self) -> dict[str, int]:
         counts = {s.value: 0 for s in FileStatus}
@@ -356,9 +392,10 @@ class FileDB:
             libs[lib]["saved"] = int(libs[lib]["saved"]) + row[4]
         return list(libs.values())
 
-    def get_by_id(self, file_id: int) -> sqlite3.Row | None:
+    def get_by_id(self, file_id: int) -> FileRecord | None:
         cur = self.conn.execute("SELECT rowid, * FROM files WHERE rowid=?", (file_id,))
-        return cur.fetchone()
+        row = cur.fetchone()
+        return _row_to_record(row) if row else None
 
     def get_last_scan(self, library: str) -> str | None:
         cur = self.conn.execute("SELECT last_scan_at FROM library_scans WHERE library=?", (library,))
@@ -374,7 +411,7 @@ class FileDB:
         has_retry: bool | None = None,
         offset: int = 0,
         limit: int = 50,
-    ) -> list[sqlite3.Row]:
+    ) -> list[FileRecord]:
         conditions = []
         params: list[object] = []
         if status:
@@ -393,7 +430,7 @@ class FileDB:
         where = " AND ".join(conditions) if conditions else "1=1"
         sql = f"SELECT rowid, * FROM files WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        return self.conn.execute(sql, params).fetchall()
+        return _rows_to_records(self.conn.execute(sql, params).fetchall())
 
     def search_history(
         self,
@@ -401,7 +438,7 @@ class FileDB:
         library: str | None = None,
         offset: int = 0,
         limit: int = 50,
-    ) -> list[sqlite3.Row]:
+    ) -> list[FileRecord]:
         conditions = ["status IN ('completed', 'failed', 'skipped')"]
         params: list[object] = []
         if status:
@@ -413,7 +450,7 @@ class FileDB:
         where = " AND ".join(conditions)
         sql = f"SELECT rowid, * FROM files WHERE {where} ORDER BY completed_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        return self.conn.execute(sql, params).fetchall()
+        return _rows_to_records(self.conn.execute(sql, params).fetchall())
 
     def history_stats(self, status: str | None = None, library: str | None = None) -> dict[str, object]:
         conditions = ["status IN ('completed', 'failed', 'skipped')"]
@@ -533,12 +570,12 @@ class FileDB:
             )
         self.conn.commit()
 
-    def list_ready_held_files(self, now: datetime) -> list[sqlite3.Row]:
+    def list_ready_held_files(self, now: datetime) -> list[FileRecord]:
         cur = self.conn.execute(
             "SELECT * FROM files WHERE hold_until IS NOT NULL AND hold_until != '' AND hold_until <= ? ORDER BY hold_until ASC",
             (now.isoformat(),),
         )
-        return cur.fetchall()
+        return _rows_to_records(cur.fetchall())
 
     def clear_hold(self, path: str) -> None:
         self.conn.execute(
