@@ -493,8 +493,8 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
                 observer.schedule(handler, lib.path, recursive=True)
         observer.start()
 
-        # Run initial scan
-        _scan_all(respect_schedule=False)
+        # Run initial scan (respects scan_interval to avoid re-scanning on restart)
+        _scan_all(respect_schedule=True)
 
     # Start Huey consumer in current thread (blocks)
     shutdown = threading.Event()

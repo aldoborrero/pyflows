@@ -74,7 +74,7 @@ def scan_library(lib: LibraryConfig, db: FileDB, stable_for_seconds: int = 0,
                 continue
 
         existing = db.get(file_path)
-        if existing is not None and existing["size"] == size and existing["status"] in ("completed", "skipped"):
+        if existing is not None and existing["size"] == size and existing["status"] in ("completed", "skipped", "pending", "processing"):
             continue
 
         file_hash = compute_file_hash(file_path)
