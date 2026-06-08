@@ -5,6 +5,7 @@ import random
 import re
 import signal
 import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import FrameType
@@ -26,45 +27,7 @@ from pyflows.webhook import start_webhook_server
 
 log = logging.getLogger(__name__)
 
-# Module-level state set by start_daemon
-_config: PyflowsConfig | None = None
-_huey: SqliteHuey | None = None
-
 EVERY_MINUTE = crontab(minute='*')
-
-# Task references (set by _register_tasks)
-_encode_task: Callable[..., Any] | None = None
-
-# Runtime pause controls (set = running, clear = paused)
-_scanning_enabled = threading.Event()
-_encoding_enabled = threading.Event()
-_watcher_enabled = threading.Event()
-_scanning_enabled.set()
-_encoding_enabled.set()
-_watcher_enabled.set()
-
-
-def get_pause_state() -> dict[str, bool]:
-    return {
-        "scanning": _scanning_enabled.is_set(),
-        "encoding": _encoding_enabled.is_set(),
-        "watcher": _watcher_enabled.is_set(),
-    }
-
-
-def set_pause_state(component: str, enabled: bool) -> bool:
-    events = {"scanning": _scanning_enabled, "encoding": _encoding_enabled, "watcher": _watcher_enabled}
-    ev = events.get(component)
-    if ev is None:
-        return False
-    if enabled:
-        ev.set()
-    else:
-        ev.clear()
-    log_event(log, logging.INFO, "pause_state_changed",
-              f"{'Resumed' if enabled else 'Paused'} {component}",
-              component=component, enabled=enabled)
-    return True
 
 _TRANSIENT_ERROR_MARKERS = (
     "insufficient disk space",
@@ -78,29 +41,61 @@ _TRANSIENT_ERROR_MARKERS = (
 )
 
 
-def _get_config() -> PyflowsConfig:
-    """Return the module-level config, raising if not initialized."""
-    if _config is None:
+@dataclass
+class DaemonState:
+    config: PyflowsConfig
+    huey: SqliteHuey
+    encode_task: Callable[[str, str], object]
+    scanning_enabled: threading.Event = field(default_factory=threading.Event)
+    encoding_enabled: threading.Event = field(default_factory=threading.Event)
+    watcher_enabled: threading.Event = field(default_factory=threading.Event)
+
+    def __post_init__(self) -> None:
+        self.scanning_enabled.set()
+        self.encoding_enabled.set()
+        self.watcher_enabled.set()
+
+
+_state: DaemonState | None = None
+
+
+def _get_state() -> DaemonState:
+    if _state is None:
         raise RuntimeError("pyflows not initialized — call init_huey first")
-    return _config
+    return _state
+
+
+def get_pause_state() -> dict[str, bool]:
+    s = _get_state()
+    return {
+        "scanning": s.scanning_enabled.is_set(),
+        "encoding": s.encoding_enabled.is_set(),
+        "watcher": s.watcher_enabled.is_set(),
+    }
+
+
+def set_pause_state(component: str, enabled: bool) -> bool:
+    s = _get_state()
+    events = {"scanning": s.scanning_enabled, "encoding": s.encoding_enabled, "watcher": s.watcher_enabled}
+    ev = events.get(component)
+    if ev is None:
+        return False
+    if enabled:
+        ev.set()
+    else:
+        ev.clear()
+    log_event(log, logging.INFO, "pause_state_changed",
+              f"{'Resumed' if enabled else 'Paused'} {component}",
+              component=component, enabled=enabled)
+    return True
 
 
 def init_huey(config: PyflowsConfig) -> SqliteHuey:
-    global _config, _huey
-    _config = config
-    _huey = SqliteHuey(
+    global _state
+    huey = SqliteHuey(
         filename=str(Path(config.general.db_path).parent / "huey.db"),
         immediate=False,
     )
-    return _huey
-
-
-def _register_tasks() -> Callable[..., Any]:
-    """Register Huey tasks. Must be called after init_huey."""
-    global _encode_task
-    if _huey is None:
-        raise RuntimeError("Huey not initialized — call init_huey first")
-    huey = _huey
 
     @huey.periodic_task(EVERY_MINUTE)  # type: ignore[untyped-decorator]
     def scan_all() -> None:
@@ -114,23 +109,21 @@ def _register_tasks() -> Callable[..., Any]:
     def encode(file_path: str, profile_name: str) -> None:
         _encode_file(file_path, profile_name)
 
-    _encode_task = encode
-
-    encode_ref: Callable[..., Any] = encode
-    return encode_ref
+    _state = DaemonState(config=config, huey=huey, encode_task=encode)
+    return huey
 
 
 def _scan_library_if_due(db: FileDB, lib: LibraryConfig, respect_schedule: bool) -> None:
     if respect_schedule and not db.should_scan_library(lib.name, lib.scan_interval):
         return
 
-    config = _get_config()
+    state = _get_state()
     new_files = scan_library(
         lib,
         db,
-        stable_for_seconds=config.general.stable_for_seconds,
-        ffprobe_path=config.general.ffprobe_path,
-        priority_codecs=config.resolved_priority_codecs(),
+        stable_for_seconds=state.config.general.stable_for_seconds,
+        ffprobe_path=state.config.general.ffprobe_path,
+        priority_codecs=state.config.resolved_priority_codecs(),
     )
     db.record_library_scan(lib.name)
     log_event(
@@ -142,22 +135,17 @@ def _scan_library_if_due(db: FileDB, lib: LibraryConfig, respect_schedule: bool)
         scan_interval=lib.scan_interval,
         new_files=len(new_files),
     )
-    # new_files is already sorted by codec_priority (HW-decodable first),
-    # so hevc/av1/vp9 files enter Huey's FIFO queue ahead of h264/unknown.
     for file_path, profile, _codec in new_files:
-        if _encode_task is None:
-            raise RuntimeError("Tasks not registered")
-
-        _encode_task(file_path, profile)
+        state.encode_task(file_path, profile)
 
 
 def _scan_all(respect_schedule: bool = False) -> None:
     """Scan all libraries and queue encode tasks for new/changed files."""
-    if not _scanning_enabled.is_set():
+    state = _get_state()
+    if not state.scanning_enabled.is_set():
         return
-    config = _get_config()
-    with FileDB(config.general.db_path) as db:
-        for lib in config.libraries:
+    with FileDB(state.config.general.db_path) as db:
+        for lib in state.config.libraries:
             _scan_library_if_due(db, lib, respect_schedule)
 
 
@@ -167,7 +155,8 @@ def _is_transient_error(error: str) -> bool:
 
 
 def _release_held_files() -> None:
-    config = _get_config()
+    state = _get_state()
+    config = state.config
     now = datetime.now(timezone.utc)
     with FileDB(config.general.db_path) as db:
         for record in db.list_ready_held_files(now):
@@ -214,9 +203,7 @@ def _release_held_files() -> None:
             if changed:
                 codec = _probe_codec(path, config.general.ffprobe_path)
                 db.update_video_codec(path, codec)
-                if _encode_task is None:
-                    raise RuntimeError("Tasks not registered")
-                _encode_task(path, str(record["profile"]))
+                state.encode_task(path, str(record["profile"]))
                 log_event(log, logging.INFO, "file_stable_ready", "Queued stable held file",
                           file_path=path, library=str(record["library"]), codec=codec)
 
@@ -230,10 +217,8 @@ def _select_best_file(
     """Pick a higher-priority pending file if one exists, re-queuing the original."""
     best = db.get_next_pending(priority_codecs=priority_codecs)
     if best is not None and best["path"] != file_path:
-        if _encode_task is None:
-            raise RuntimeError("Tasks not registered")
-
-        _encode_task(file_path, profile_name)
+        state = _get_state()
+        state.encode_task(file_path, profile_name)
         log_event(log, logging.INFO, "encode_priority_swap",
                   "Swapped to higher-priority file",
                   original=file_path, selected=best["path"])
@@ -314,13 +299,11 @@ def _encode_file(file_path: str, profile_name: str) -> None:
     file and encodes the higher-priority one instead.  This lets existing Huey
     queue entries benefit from priority ordering even though Huey itself is FIFO.
     """
-    if not _encoding_enabled.is_set():
-        if _encode_task is None:
-            raise RuntimeError("Tasks not registered")
-
-        _encode_task(file_path, profile_name)
+    state = _get_state()
+    if not state.encoding_enabled.is_set():
+        state.encode_task(file_path, profile_name)
         return
-    config = _get_config()
+    config = state.config
     if profile_name not in config.profiles:
         log_event(log, logging.ERROR, "unknown_profile", "Unknown profile", profile=profile_name)
         return
@@ -416,7 +399,7 @@ class _MediaFileHandler(FileSystemEventHandler):  # type: ignore[misc]
 
     def _debounce(self, path: str) -> None:
         """Coalesce repeated file events before recording deferred processing state."""
-        if not _watcher_enabled.is_set():
+        if _state is not None and not _state.watcher_enabled.is_set():
             return
         with self._lock:
             if path in self._timers:
@@ -485,6 +468,8 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
                 log_event(log, logging.INFO, "codec_backfill_done",
                           "Codec backfill complete", count=len(rows))
 
+    state = _get_state()
+
     # Clean stale pyflows temp files (pattern: stem_8hexchars.ext)
     _TEMP_PATTERN = re.compile(r"^.+_[0-9a-f]{8}\..+$")
     temp_dir = Path(config.general.temp_dir)
@@ -494,18 +479,15 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
                 f.unlink()
                 log_event(log, logging.INFO, "temp_file_cleaned", "Cleaned stale temp file", file_path=str(f))
 
-    # Register Huey tasks (needed in both modes for the worker)
-    encode_task = _register_tasks()
-
     # Start webhook server (both modes)
-    webhook_server = start_webhook_server(config, encode_task)
+    webhook_server = start_webhook_server(config, state.encode_task)
 
     # File watcher and scanner (daemon mode only)
     observer = None
     handler = None
     if mode == "daemon":
         observer = Observer()
-        handler = _MediaFileHandler(config, encode_task)
+        handler = _MediaFileHandler(config, state.encode_task)
         for lib in config.libraries:
             if Path(lib.path).exists():
                 observer.schedule(handler, lib.path, recursive=True)
@@ -538,7 +520,7 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
 
     log_event(log, logging.INFO, "daemon_started", "pyflows daemon started",
               mode=mode, workers=config.general.workers)
-    consumer = huey.create_consumer(workers=config.general.workers, worker_type="thread")
+    consumer = state.huey.create_consumer(workers=config.general.workers, worker_type="thread")
     consumer.start()
 
     try:

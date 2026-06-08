@@ -6,6 +6,7 @@ from pyflows.config import load_config
 from pyflows.db import FileDB, FileStatus, compute_file_hash
 from pyflows import tasks
 from pyflows.tasks import (
+    DaemonState,
     _release_held_files,
     _handle_encode_failure,
     _handle_encode_success,
@@ -51,8 +52,12 @@ def test_release_held_files_queues_stable_file(tmp_config) -> None:
     media_file.write_bytes(b"x" * 1024)
 
     queued: list[tuple[str, str]] = []
-    tasks._config = config
-    tasks._encode_task = lambda path, profile: queued.append((path, profile))
+    from huey import SqliteHuey  # type: ignore[import-not-found]
+    tasks._state = DaemonState(
+        config=config,
+        huey=SqliteHuey(filename=":memory:", immediate=True),
+        encode_task=lambda path, profile: queued.append((path, profile)),
+    )
 
     with FileDB(config.general.db_path) as db:
         observed_mtime = datetime.fromtimestamp(media_file.stat().st_mtime, tz=timezone.utc)
@@ -273,8 +278,13 @@ def test_select_best_file_swaps_to_priority(tmp_config) -> None:
     vp9_path = "/media/vp9_file.mkv"
 
     mock_encode = MagicMock()
-    original_encode_task = tasks._encode_task
-    tasks._encode_task = mock_encode
+    from huey import SqliteHuey  # type: ignore[import-not-found]
+    original_state = tasks._state
+    tasks._state = DaemonState(
+        config=config,
+        huey=SqliteHuey(filename=":memory:", immediate=True),
+        encode_task=mock_encode,
+    )
 
     try:
         with FileDB(config.general.db_path) as db:
@@ -289,4 +299,4 @@ def test_select_best_file_swaps_to_priority(tmp_config) -> None:
         assert result_profile == "test"
         mock_encode.assert_called_once_with(h264_path, "test")
     finally:
-        tasks._encode_task = original_encode_task
+        tasks._state = original_state
