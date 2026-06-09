@@ -238,6 +238,68 @@ def test_claim_for_processing_nonexistent(tmp_path):
         assert db.claim_for_processing("/media/nonexistent.mkv") is False
 
 
+def test_migration_adds_fencing_columns_to_existing_db(tmp_path):
+    """Opening an existing DB (pre-fencing) adds the new columns via migration."""
+    import sqlite3
+    db_path = str(tmp_path / "old.db")
+    # Create a DB with only the original schema (no fencing columns)
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE files (
+            id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
+            library TEXT NOT NULL,
+            profile TEXT NOT NULL,
+            file_hash TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            video_codec TEXT,
+            output_codec TEXT,
+            output_size INTEGER,
+            error TEXT,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            next_retry_at TEXT,
+            hold_until TEXT,
+            last_seen_at TEXT,
+            last_observed_size INTEGER,
+            last_observed_mtime TEXT,
+            arr_source TEXT,
+            arr_id INTEGER,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT
+        );
+        CREATE TABLE library_scans (library TEXT PRIMARY KEY, last_scan_at TEXT NOT NULL);
+    """)
+    conn.execute(
+        "INSERT INTO files (path, library, profile, file_hash, size, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("/media/old.mkv", "Movies", "movie", "abc", 1000, "pending", "2026-01-01T00:00:00+00:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    # Open with FileDB — migration should add fencing columns
+    with FileDB(db_path) as db:
+        record = db.get("/media/old.mkv")
+        assert record is not None
+        assert record["status"] == "pending"
+        assert record["dispatch_token"] is None
+        assert record["dispatched_at"] is None
+        assert record["committing_at"] is None
+        assert record["needs_gpu"] == 0
+        assert record["commit_temp_path"] is None
+        assert record["commit_target_path"] is None
+        assert record["expected_output_size"] is None
+        assert record["expected_output_hash"] is None
+
+        # Fencing token methods work on migrated rows
+        assert db.claim_with_token("/media/old.mkv", "tok-1", needs_gpu=True) is True
+        record = db.get("/media/old.mkv")
+        assert record["dispatch_token"] == "tok-1"
+        assert record["needs_gpu"] == 1
+
+
 # --- Fencing token tests ---
 
 
