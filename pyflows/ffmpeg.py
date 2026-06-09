@@ -17,92 +17,112 @@ from pyflows.logging_utils import log_event
 
 log = logging.getLogger(__name__)
 
-DEFAULT_STALL_TIMEOUT = 300  # Kill if no progress for 5 minutes
-STARTUP_TIMEOUT = 600  # Kill if ffmpeg never starts producing progress (10 minutes)
+DEFAULT_STALL_TIMEOUT = 300
+STARTUP_TIMEOUT = 600
 STDERR_TAIL_BYTES = 1000
 _OUT_TIME_US_PREFIX = b"out_time_us="
 _SPEED_PREFIX = b"speed="
 
-class _ActiveProcess:
-    """Thread-safe holder for the currently running ffmpeg process."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._proc: subprocess.Popen | None = None  # type: ignore[type-arg]
-
-    def set(self, proc: subprocess.Popen) -> None:  # type: ignore[type-arg]
-        with self._lock:
-            self._proc = proc
-
-    def clear(self) -> None:
-        with self._lock:
-            self._proc = None
-
-    def terminate(self) -> None:
-        with self._lock:
-            proc = self._proc
-        if proc is not None:
-            try:
-                proc.terminate()
-            except OSError:
-                pass
-
-
-_active_process = _ActiveProcess()
+DEFAULT_VAAPI_HW_DECODE_CODECS: frozenset[str] = frozenset({"hevc", "av1", "vp9"})
+DEFAULT_VAAPI_ENV = {"AMD_DEBUG": "noefc"}
+VAAPI_HW_DECODE_CODECS = DEFAULT_VAAPI_HW_DECODE_CODECS
 
 
 @dataclass
 class EncodeProgress:
-    """Snapshot of real-time encode progress."""
-
     out_time_us: int = 0
     speed: float = 0.0
     file_path: str = ""
 
 
-class ProgressTracker:
-    """Thread-safe tracker for the active ffmpeg encode progress."""
+class ProcessRegistry:
+    """Thread-safe registry of active FFmpeg processes keyed by token."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._progress = EncodeProgress()
+        self._procs: dict[str, subprocess.Popen] = {}  # type: ignore[type-arg]
+        self._closed = False
 
-    def get(self) -> EncodeProgress:
+    def register(self, key: str, proc: subprocess.Popen) -> None:  # type: ignore[type-arg]
         with self._lock:
-            return EncodeProgress(
-                out_time_us=self._progress.out_time_us,
-                speed=self._progress.speed,
-                file_path=self._progress.file_path,
-            )
+            if self._closed:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        proc.kill()
+                        proc.wait()
+                    except OSError:
+                        pass
+                return
+            self._procs[key] = proc
 
-    def update(self, file_path: str, out_time_us: int, speed: float) -> None:
+    def unregister(self, key: str) -> None:
         with self._lock:
-            self._progress.file_path = file_path
-            self._progress.out_time_us = out_time_us
-            self._progress.speed = speed
+            self._procs.pop(key, None)
 
-    def clear(self) -> None:
+    def terminate_all(self) -> None:
         with self._lock:
-            self._progress = EncodeProgress()
+            self._closed = True
+            procs = list(self._procs.values())
+        for proc in procs:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+        for proc in procs:
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait()
+                except OSError:
+                    pass
+            except OSError:
+                pass
 
 
-_progress_tracker = ProgressTracker()
+class ProgressRegistry:
+    """Thread-safe registry of encode progress keyed by token."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._data: dict[str, EncodeProgress] = {}
+
+    def update(self, key: str, out_time_us: int, speed: float, file_path: str = "") -> None:
+        with self._lock:
+            self._data[key] = EncodeProgress(out_time_us=out_time_us, speed=speed, file_path=file_path)
+
+    def get(self, key: str) -> EncodeProgress | None:
+        with self._lock:
+            p = self._data.get(key)
+            if p is None:
+                return None
+            return EncodeProgress(out_time_us=p.out_time_us, speed=p.speed, file_path=p.file_path)
+
+    def get_any_active(self) -> EncodeProgress:
+        with self._lock:
+            for p in self._data.values():
+                return EncodeProgress(out_time_us=p.out_time_us, speed=p.speed, file_path=p.file_path)
+        return EncodeProgress()
+
+    def remove(self, key: str) -> None:
+        with self._lock:
+            self._data.pop(key, None)
+
+
+_process_registry = ProcessRegistry()
+_progress_registry = ProgressRegistry()
 
 
 def get_current_progress() -> EncodeProgress:
-    return _progress_tracker.get()
+    return _progress_registry.get_any_active()
 
 
-# Default codecs where VAAPI hardware decode is confirmed reliable on AMD/Mesa.
-# These use Pipeline 1 (HW decode + HW encode): fast full-GPU path.
-DEFAULT_VAAPI_HW_DECODE_CODECS: frozenset[str] = frozenset({"hevc", "av1", "vp9"})
-
-# Default AMD-specific env var: disables the unstable EFC (Explicit Frame Copy)
-# feature in Mesa. Jellyfin sets this for all AMD VAAPI sessions.
-DEFAULT_VAAPI_ENV = {"AMD_DEBUG": "noefc"}
-
-# Backwards-compatible alias used in tests and older imports.
-VAAPI_HW_DECODE_CODECS = DEFAULT_VAAPI_HW_DECODE_CODECS
+def terminate_active_encode() -> None:
+    _process_registry.terminate_all()
 
 
 @dataclass
@@ -147,14 +167,12 @@ class FFmpegCommand:
         self._vaapi_device = device
 
     def configure_hardware(self, hardware: HardwareConfig) -> None:
-        """Apply runtime-configurable hardware/VAAPI settings."""
         self._vaapi_name = hardware.vaapi.device
         self._vaapi_hw_decode_codecs = frozenset(codec.lower() for codec in hardware.vaapi.hw_decode_codecs)
         self._vaapi_upload_filter = hardware.vaapi.upload_filter
         self._vaapi_env = dict(hardware.env)
 
     def set_input_codec(self, codec: str) -> None:
-        """Set the input video codec to select the correct VAAPI pipeline."""
         self._input_codec = codec
 
     def set_ffmpeg_path(self, path: str) -> None:
@@ -164,8 +182,7 @@ class FFmpegCommand:
         self._inputs.append((path, kwargs))
 
     def map_stream(self, spec: str) -> int:
-        """Map a stream and return its global output index."""
-        stream_type = spec.split(":")[1]  # v, a, or s
+        stream_type = spec.split(":")[1]
         type_idx = sum(1 for _, t, _ in self._maps if t == stream_type)
         self._maps.append((spec, stream_type, type_idx))
         return len(self._maps) - 1
@@ -183,98 +200,70 @@ class FFmpegCommand:
         self._output = path
 
     def _use_hw_decode(self) -> bool:
-        """Return True if the input codec supports reliable VAAPI HW decode."""
         return self._input_codec in self._vaapi_hw_decode_codecs if self._input_codec else False
 
     def build(self) -> list[str]:
-        """Build the complete ffmpeg argument list."""
         args = [self._ffmpeg_path] + self._global_opts
 
         if self._vaapi_device:
             hw_decode = self._use_hw_decode()
-            # Common: initialise the VAAPI device with a named alias
             args += ["-init_hw_device", f"vaapi={self._vaapi_name}:{self._vaapi_device}"]
 
             if hw_decode:
-                # Pipeline 1: hardware decode keeps frames on the GPU.
-                # -hwaccel_output_format vaapi ensures the decoder outputs
-                # VAAPI surfaces that hevc_vaapi can consume directly.
                 args += [
                     "-hwaccel", "vaapi",
                     "-hwaccel_output_format", "vaapi",
                     "-hwaccel_device", self._vaapi_name,
                 ]
             else:
-                # Pipeline 2: software decode, GPU encode.
-                # -filter_hw_device tells the filter graph which VAAPI device
-                # hwupload_vaapi should target (required — without it the
-                # filter cannot locate the device and silently stalls).
                 args += ["-filter_hw_device", self._vaapi_name]
 
-        # Inputs
         for path, kwargs in self._inputs:
             for k, v in kwargs.items():
                 args += [f"-{k}", str(v)]
             args += ["-i", path]
 
-        # Stream mappings
         for spec, _, _ in self._maps:
             args += ["-map", spec]
 
-        # Video filter
         if self._vaapi_device and not self._use_hw_decode():
-            # Pipeline 2: convert decoded frames to NV12 then upload to VAAPI.
-            # format=nv12 ensures a pixel format the VAAPI encoder accepts.
-            # hwupload_vaapi uploads from system memory to the GPU surface
-            # pointed to by -filter_hw_device.
             args += ["-vf", self._vaapi_upload_filter]
-        # Pipeline 1: no filter — frames are already on the GPU.
 
-        # Per-stream codecs (using per-type indices)
         for idx, (codec, opts) in sorted(self._codecs.items()):
             _, stype, type_idx = self._maps[idx]
             args += [f"-c:{stype}:{type_idx}", codec]
             for k, v in opts.items():
                 args += [f"-{k}:{stype}:{type_idx}", str(v)]
 
-        # Metadata (using per-type indices)
         for idx, key, value in self._metadata:
             _, stype, type_idx = self._maps[idx]
             args += [f"-metadata:s:{stype}:{type_idx}", f"{key}={value}"]
 
-        # Dispositions (using per-type indices)
         for idx, value in sorted(self._dispositions.items()):
             _, stype, type_idx = self._maps[idx]
             args += [f"-disposition:{stype}:{type_idx}", value]
 
-        # Output
         args.append(self._output)
 
         return args
 
-    def run(self, stall_timeout: int = DEFAULT_STALL_TIMEOUT, startup_timeout: int = STARTUP_TIMEOUT) -> subprocess.CompletedProcess[str]:
-        """Execute the ffmpeg command with stall detection.
-
-        Uses ``-progress pipe:1`` to monitor ffmpeg's ``out_time_us`` output.
-        If encoding progress doesn't advance for *stall_timeout* seconds,
-        the process is terminated (SIGTERM, then SIGKILL after 10s).
-
-        This adapts to any file length or encode speed — short files finish
-        quickly, slow CPU encodes are allowed as long as they keep progressing,
-        and hung processes are killed in minutes rather than hours.
-        """
+    def run(self, stall_timeout: int = DEFAULT_STALL_TIMEOUT,
+            startup_timeout: int = STARTUP_TIMEOUT,
+            registry_key: str = "") -> subprocess.CompletedProcess[str]:
+        """Execute the ffmpeg command with stall detection."""
         args = self.build()
 
-        # Inject -progress pipe:1 -nostats before the output path.
-        # This makes ffmpeg write machine-readable progress to stdout.
         progress_args = list(args)
-        output_idx = len(progress_args) - 1  # last arg is output path
+        output_idx = len(progress_args) - 1
         progress_args[output_idx:output_idx] = ["-progress", "pipe:1", "-nostats"]
 
         log_event(log, logging.INFO, "ffmpeg_run", "Running ffmpeg",
                   command=" ".join(args), stall_timeout=stall_timeout)
 
         env = {**os.environ, **self._vaapi_env} if self._vaapi_device else None
+
+        input_path = self._inputs[0][0] if self._inputs else ""
+        reg_key = registry_key or input_path
 
         with tempfile.NamedTemporaryFile(
             mode="w+b", suffix=".log", prefix="pyflows-ffmpeg-", delete=True
@@ -286,15 +275,10 @@ class FFmpegCommand:
                 env=env,
             )
 
-            _active_process.set(proc)
+            _process_registry.register(reg_key, proc)
+            _progress_registry.update(reg_key, 0, 0.0, file_path=input_path)
 
-            input_path = self._inputs[0][0] if self._inputs else ""
-            _progress_tracker.update(input_path, 0, 0.0)
-
-            # Track progress from stdout in a background thread.
-            # Stall clock starts only after the first progress line is received,
-            # so ffmpeg's initial input analysis phase doesn't trigger a false stall.
-            last_progress_time: float | None = None  # None = no progress yet
+            last_progress_time: float | None = None
             last_out_time_us: int = -1
             progress_lock = threading.Lock()
             stalled = threading.Event()
@@ -312,7 +296,7 @@ class FFmpegCommand:
                                     if value > last_out_time_us:
                                         last_out_time_us = value
                                         last_progress_time = time.monotonic()
-                                _progress_tracker.update(input_path, value, current_speed)
+                                _progress_registry.update(reg_key, value, current_speed, file_path=input_path)
                             except ValueError:
                                 pass
                         elif line.startswith(_SPEED_PREFIX):
@@ -322,18 +306,16 @@ class FFmpegCommand:
                             except ValueError:
                                 pass
                 except (OSError, ValueError):
-                    pass  # stdout closed after process kill
+                    pass
 
             reader = threading.Thread(target=_read_progress, daemon=True, name="ffmpeg-progress")
             reader.start()
 
-            # Poll for stall or completion
             start_time = time.monotonic()
             while proc.poll() is None:
                 time.sleep(5)
                 with progress_lock:
                     if last_progress_time is None:
-                        # No progress line received yet (ffmpeg still analyzing input).
                         if time.monotonic() - start_time > startup_timeout:
                             stalled.set()
                             log_event(log, logging.ERROR, "ffmpeg_startup_timeout",
@@ -370,8 +352,8 @@ class FFmpegCommand:
                     reason = f"[STARTUP TIMEOUT: no progress output for {startup_timeout}s]"
                 else:
                     reason = f"[STALL detected: no progress for {stall_timeout}s]"
-                _active_process.clear()
-                _progress_tracker.clear()
+                _process_registry.unregister(reg_key)
+                _progress_registry.remove(reg_key)
                 return subprocess.CompletedProcess(
                     args=args, returncode=-1, stdout="",
                     stderr=f"{reason} {tail}",
@@ -381,17 +363,8 @@ class FFmpegCommand:
             stderr_file.seek(max(0, pos - STDERR_TAIL_BYTES))
             stderr_tail = stderr_file.read().decode("utf-8", errors="replace")
 
-        _active_process.clear()
-        _progress_tracker.clear()
+        _process_registry.unregister(reg_key)
+        _progress_registry.remove(reg_key)
         return subprocess.CompletedProcess(
             args=args, returncode=proc.returncode, stdout="", stderr=stderr_tail,
         )
-
-
-def terminate_active_encode() -> None:
-    """Terminate the active ffmpeg process, if any.
-
-    Called during daemon shutdown so SIGTERM is not blocked waiting for
-    a long-running encode to finish on its own.
-    """
-    _active_process.terminate()
