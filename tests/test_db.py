@@ -236,3 +236,193 @@ def test_claim_for_processing_wrong_status(tmp_path):
 def test_claim_for_processing_nonexistent(tmp_path):
     with FileDB(str(tmp_path / "test.db")) as db:
         assert db.claim_for_processing("/media/nonexistent.mkv") is False
+
+
+# --- Fencing token tests ---
+
+
+def test_claim_with_token_and_start(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        assert db.claim_with_token("/media/test.mkv", "tok-1", needs_gpu=True) is True
+        record = db.get("/media/test.mkv")
+        assert record["status"] == "processing"
+        assert record["dispatch_token"] == "tok-1"
+        assert record["needs_gpu"] == 1
+        assert record["started_at"] is None
+        assert db.start_encode("/media/test.mkv", "tok-1") is True
+        record = db.get("/media/test.mkv")
+        assert record["started_at"] is not None
+
+
+def test_start_encode_rejects_duplicate(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        assert db.start_encode("/media/test.mkv", "tok-1") is True
+        assert db.start_encode("/media/test.mkv", "tok-1") is False
+
+
+def test_start_encode_rejects_wrong_token(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        assert db.start_encode("/media/test.mkv", "wrong") is False
+
+
+def test_release_claim(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        assert db.release_claim("/media/test.mkv", "tok-1") is True
+        record = db.get("/media/test.mkv")
+        assert record["status"] == "pending"
+        assert record["dispatch_token"] is None
+
+
+def test_fail_attempt_by_token(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        assert db.fail_attempt("tok-1", "crash") is True
+        record = db.get("/media/test.mkv")
+        assert record["status"] == "failed"
+        assert record["error"] == "crash"
+        assert record["dispatch_token"] is None
+        assert record["needs_gpu"] == 0
+
+
+def test_fail_attempt_from_committing(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        db.transition_to_committing("/media/test.mkv", "tok-1",
+                                     temp_path="/tmp/out.mkv", target_path="/media/test.mkv",
+                                     expected_size=500, expected_hash="def456")
+        assert db.fail_attempt("tok-1", "commit failed") is True
+        record = db.get("/media/test.mkv")
+        assert record["status"] == "failed"
+        assert record["commit_temp_path"] is None
+
+
+def test_skip_with_token(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        assert db.skip_with_token("/media/test.mkv", "tok-1") is True
+        record = db.get("/media/test.mkv")
+        assert record["status"] == "skipped"
+
+
+def test_transition_to_committing(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        assert db.transition_to_committing(
+            "/media/test.mkv", "tok-1",
+            temp_path="/tmp/out.mkv", target_path="/media/test.mkv",
+            expected_size=500, expected_hash="hash123") is True
+        record = db.get("/media/test.mkv")
+        assert record["status"] == "committing"
+        assert record["commit_temp_path"] == "/tmp/out.mkv"
+        assert record["expected_output_hash"] == "hash123"
+
+
+def test_complete_commit(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        db.transition_to_committing("/media/test.mkv", "tok-1",
+                                     temp_path="/tmp/o.mkv", target_path="/media/test.mkv",
+                                     expected_size=500, expected_hash="h1")
+        assert db.complete_commit("tok-1", final_path="/media/test.mkv",
+                                  output_codec="hevc", output_size=500,
+                                  output_hash="h1") is True
+        record = db.get("/media/test.mkv")
+        assert record["status"] == "completed"
+        assert record["dispatch_token"] is None
+        assert record["commit_temp_path"] is None
+
+
+def test_complete_commit_requires_committing(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        assert db.complete_commit("tok-1", final_path="/media/test.mkv",
+                                  output_codec="hevc", output_size=500,
+                                  output_hash="h1") is False
+
+
+def test_capacity_counts_include_committing(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/media/a.mkv", "Movies", "movie", "a", 1000, "h264")
+        db.upsert("/media/b.mkv", "Movies", "movie", "b", 2000, "h264")
+        db.claim_with_token("/media/a.mkv", "tok-1", needs_gpu=True)
+        db.claim_with_token("/media/b.mkv", "tok-2")
+        db.transition_to_committing("/media/b.mkv", "tok-2",
+                                     temp_path="/tmp/b.mkv", target_path="/media/b.mkv",
+                                     expected_size=1500, expected_hash="h2")
+        assert db.count_active() == 2
+        assert db.gpu_active_count() == 1
+        assert db.library_active_counts() == {"Movies": 2}
+
+
+def test_get_pending_batch_excludes_libraries(tmp_path):
+    with FileDB(str(tmp_path / "test.db")) as db:
+        db.upsert("/lib_a/f.mkv", "Library A", "test", "a", 1000, "h264")
+        db.upsert("/lib_b/f.mkv", "Library B", "test", "b", 2000, "h264")
+        batch = db.get_pending_batch(exclude_libraries={"Library A"})
+        assert len(batch) == 1
+        assert batch[0]["library"] == "Library B"
+
+
+def test_reconcile_committing_target_exists(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    target = tmp_path / "output.mkv"
+    target.write_bytes(b"x" * 500)
+    with FileDB(db_path) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        expected_hash = compute_file_hash(str(target))
+        db.transition_to_committing("/media/test.mkv", "tok-1",
+                                     temp_path="/tmp/temp.mkv",
+                                     target_path=str(target),
+                                     expected_size=500,
+                                     expected_hash=expected_hash)
+        count = db.reconcile_committing()
+        assert count == 1
+        record = db.get(str(target))
+        assert record is not None
+        assert record["status"] == "completed"
+
+
+def test_reconcile_committing_target_missing(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    with FileDB(db_path) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        db.transition_to_committing("/media/test.mkv", "tok-1",
+                                     temp_path="/tmp/missing.mkv",
+                                     target_path="/media/output.mkv",
+                                     expected_size=500,
+                                     expected_hash="nope")
+        count = db.reconcile_committing()
+        assert count == 1
+        record = db.get("/media/test.mkv")
+        assert record["status"] == "failed"
+        assert record["dispatch_token"] is None
+
+
+def test_reconcile_committing_stale_only(tmp_path):
+    from datetime import timedelta
+    db_path = str(tmp_path / "test.db")
+    with FileDB(db_path) as db:
+        db.upsert("/media/test.mkv", "Movies", "movie", "abc", 1000, "h264")
+        db.claim_with_token("/media/test.mkv", "tok-1")
+        db.transition_to_committing("/media/test.mkv", "tok-1",
+                                     temp_path="/tmp/t.mkv", target_path="/media/o.mkv",
+                                     expected_size=500, expected_hash="h")
+        from datetime import datetime, timezone
+        future = datetime.now(timezone.utc) + timedelta(hours=2)
+        count = db.reconcile_committing(older_than=future)
+        assert count == 1

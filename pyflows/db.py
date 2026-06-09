@@ -41,6 +41,14 @@ class FileRecord(TypedDict, total=False):
     created_at: str
     started_at: str | None
     completed_at: str | None
+    dispatch_token: str | None
+    dispatched_at: str | None
+    committing_at: str | None
+    needs_gpu: int
+    commit_temp_path: str | None
+    commit_target_path: str | None
+    expected_output_size: int | None
+    expected_output_hash: str | None
 
 
 def _row_to_record(row: sqlite3.Row) -> FileRecord:
@@ -54,14 +62,28 @@ def _rows_to_records(rows: list[sqlite3.Row]) -> list[FileRecord]:
 class FileStatus(enum.StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
+    COMMITTING = "committing"
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
 
 
+ACTIVE_STATUSES = (FileStatus.PROCESSING, FileStatus.COMMITTING)
+
 VALID_TRANSITIONS: dict[FileStatus, set[FileStatus]] = {
     FileStatus.PENDING: {FileStatus.PROCESSING, FileStatus.COMPLETED, FileStatus.FAILED, FileStatus.SKIPPED},
-    FileStatus.PROCESSING: {FileStatus.COMPLETED, FileStatus.FAILED, FileStatus.SKIPPED, FileStatus.PENDING},
+    FileStatus.PROCESSING: {FileStatus.PENDING, FileStatus.COMMITTING, FileStatus.COMPLETED, FileStatus.SKIPPED, FileStatus.FAILED},
+    FileStatus.COMMITTING: {FileStatus.COMPLETED, FileStatus.FAILED},
+    FileStatus.COMPLETED: {FileStatus.PENDING},
+    FileStatus.FAILED: {FileStatus.PENDING},
+    FileStatus.SKIPPED: {FileStatus.PENDING},
+}
+
+# Strict transitions enforced by fencing token methods (PR 3 will make these the only transitions)
+STRICT_TRANSITIONS: dict[FileStatus, set[FileStatus]] = {
+    FileStatus.PENDING: {FileStatus.PROCESSING},
+    FileStatus.PROCESSING: {FileStatus.PENDING, FileStatus.COMMITTING, FileStatus.SKIPPED, FileStatus.FAILED},
+    FileStatus.COMMITTING: {FileStatus.COMPLETED, FileStatus.FAILED},
     FileStatus.COMPLETED: {FileStatus.PENDING},
     FileStatus.FAILED: {FileStatus.PENDING},
     FileStatus.SKIPPED: {FileStatus.PENDING},
@@ -280,6 +302,198 @@ class FileDB:
         )
         self.conn.commit()
         return cur.rowcount > 0
+
+    def claim_with_token(self, path: str, token: str, *, needs_gpu: bool = False) -> bool:
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, dispatch_token=?, dispatched_at=?, "
+            "started_at=NULL, needs_gpu=?, next_retry_at=NULL "
+            "WHERE path=? AND status=?",
+            (FileStatus.PROCESSING, token, _utcnow_iso(), int(needs_gpu),
+             path, FileStatus.PENDING),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def start_encode(self, path: str, token: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE files SET started_at=? "
+            "WHERE path=? AND dispatch_token=? AND status=? AND started_at IS NULL",
+            (_utcnow_iso(), path, token, FileStatus.PROCESSING),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def release_claim(self, path: str, token: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, dispatch_token=NULL, dispatched_at=NULL, "
+            "started_at=NULL, needs_gpu=0 "
+            "WHERE path=? AND dispatch_token=? AND status=?",
+            (FileStatus.PENDING, path, token, FileStatus.PROCESSING),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def fail_attempt(self, token: str, error: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, error=?, completed_at=?, "
+            "dispatch_token=NULL, dispatched_at=NULL, committing_at=NULL, "
+            "needs_gpu=0, commit_temp_path=NULL, commit_target_path=NULL, "
+            "expected_output_size=NULL, expected_output_hash=NULL "
+            "WHERE dispatch_token=? AND status IN (?, ?)",
+            (FileStatus.FAILED, error, _utcnow_iso(),
+             token, FileStatus.PROCESSING, FileStatus.COMMITTING),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def skip_with_token(self, path: str, token: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, completed_at=?, "
+            "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 "
+            "WHERE path=? AND dispatch_token=? AND status=?",
+            (FileStatus.SKIPPED, _utcnow_iso(), path, token, FileStatus.PROCESSING),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def retry_with_token(self, path: str, token: str, error: str,
+                         retry_count: int, next_retry_at: datetime) -> bool:
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, error=?, retry_count=?, next_retry_at=?, "
+            "started_at=NULL, completed_at=NULL, dispatch_token=NULL, "
+            "dispatched_at=NULL, needs_gpu=0 "
+            "WHERE path=? AND dispatch_token=? AND status=?",
+            (FileStatus.PENDING, error, retry_count, next_retry_at.isoformat(),
+             path, token, FileStatus.PROCESSING),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def transition_to_committing(self, path: str, token: str, *,
+                                  temp_path: str, target_path: str,
+                                  expected_size: int, expected_hash: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, committing_at=?, "
+            "commit_temp_path=?, commit_target_path=?, "
+            "expected_output_size=?, expected_output_hash=? "
+            "WHERE path=? AND dispatch_token=? AND status=?",
+            (FileStatus.COMMITTING, _utcnow_iso(), temp_path, target_path,
+             expected_size, expected_hash, path, token, FileStatus.PROCESSING),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def complete_commit(self, token: str, *, final_path: str,
+                        output_codec: str, output_size: int, output_hash: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE files SET status=?, path=?, output_codec=?, output_size=?, "
+            "file_hash=?, completed_at=?, retry_count=0, next_retry_at=NULL, "
+            "hold_until=NULL, dispatch_token=NULL, dispatched_at=NULL, "
+            "committing_at=NULL, needs_gpu=0, commit_temp_path=NULL, "
+            "commit_target_path=NULL, expected_output_size=NULL, expected_output_hash=NULL "
+            "WHERE dispatch_token=? AND status=?",
+            (FileStatus.COMPLETED, final_path, output_codec, output_size,
+             output_hash, _utcnow_iso(), token, FileStatus.COMMITTING),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def count_active(self) -> int:
+        row = self.conn.execute(
+            "SELECT count(*) FROM files WHERE status IN (?, ?)",
+            ACTIVE_STATUSES,
+        ).fetchone()
+        return row[0]
+
+    def library_active_counts(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT library, count(*) FROM files WHERE status IN (?, ?) GROUP BY library",
+            ACTIVE_STATUSES,
+        ).fetchall()
+        return {str(r[0]): r[1] for r in rows}
+
+    def gpu_active_count(self) -> int:
+        row = self.conn.execute(
+            "SELECT count(*) FROM files WHERE status IN (?, ?) AND needs_gpu=1",
+            ACTIVE_STATUSES,
+        ).fetchone()
+        return row[0]
+
+    def get_pending_batch(self, exclude_libraries: set[str] | None = None,
+                          priority_codecs: list[str] | None = None,
+                          limit: int = 50) -> list[FileRecord]:
+        now_iso = _utcnow().isoformat()
+        conditions = [
+            "status = 'pending'",
+            "(next_retry_at IS NULL OR next_retry_at <= ?)",
+            "(hold_until IS NULL OR hold_until <= ?)",
+        ]
+        params: list[object] = [now_iso, now_iso]
+        if exclude_libraries:
+            placeholders = ",".join("?" for _ in exclude_libraries)
+            conditions.append(f"library NOT IN ({placeholders})")
+            params.extend(exclude_libraries)
+        where = " AND ".join(conditions)
+        priority_codecs = [c.lower() for c in (priority_codecs or [])]
+        if priority_codecs:
+            codec_placeholders = ",".join("?" for _ in priority_codecs)
+            order = f"CASE WHEN lower(coalesce(video_codec, '')) IN ({codec_placeholders}) THEN 0 ELSE 1 END, created_at"
+            params.extend(priority_codecs)
+        else:
+            order = "created_at"
+        sql = f"SELECT * FROM files WHERE {where} ORDER BY {order} LIMIT ?"
+        params.append(limit)
+        return _rows_to_records(self.conn.execute(sql, params).fetchall())
+
+    def reconcile_committing(self, *, older_than: datetime | None = None) -> int:
+        conditions = ["status = ?"]
+        params: list[object] = [FileStatus.COMMITTING]
+        if older_than is not None:
+            conditions.append("committing_at < ?")
+            params.append(older_than.isoformat())
+        where = " AND ".join(conditions)
+        rows = self.conn.execute(
+            f"SELECT path, dispatch_token, commit_temp_path, commit_target_path, "
+            f"expected_output_size, expected_output_hash FROM files WHERE {where}",
+            params,
+        ).fetchall()
+        count = 0
+        for row in rows:
+            path, token = str(row[0]), str(row[1] or "")
+            temp, target = row[2], row[3]
+            expected_size, expected_hash = row[4], row[5]
+            target_ok = False
+            if target and Path(target).exists() and expected_size:
+                actual_size = Path(target).stat().st_size
+                if actual_size == expected_size:
+                    if expected_hash:
+                        target_ok = compute_file_hash(target) == expected_hash
+                    else:
+                        target_ok = True
+            if target_ok:
+                final_path = target if target != path else path
+                self.conn.execute(
+                    "UPDATE files SET status=?, path=?, completed_at=?, "
+                    "commit_temp_path=NULL, commit_target_path=NULL, "
+                    "expected_output_size=NULL, expected_output_hash=NULL, "
+                    "dispatch_token=NULL, dispatched_at=NULL, committing_at=NULL, needs_gpu=0 "
+                    "WHERE path=?",
+                    (FileStatus.COMPLETED, final_path, _utcnow_iso(), path))
+                if target != path and Path(path).exists():
+                    Path(path).unlink(missing_ok=True)
+            else:
+                if temp and Path(temp).exists():
+                    Path(temp).unlink(missing_ok=True)
+                self.conn.execute(
+                    "UPDATE files SET status=?, error='interrupted during commit', "
+                    "commit_temp_path=NULL, commit_target_path=NULL, "
+                    "expected_output_size=NULL, expected_output_hash=NULL, "
+                    "dispatch_token=NULL, dispatched_at=NULL, committing_at=NULL, needs_gpu=0 "
+                    "WHERE path=?",
+                    (FileStatus.FAILED, path))
+            count += 1
+        self.conn.commit()
+        return count
 
     def update_video_codec(self, path: str, codec: str) -> None:
         """Store the probed video codec without touching any other field."""
@@ -660,7 +874,22 @@ class FileDB:
             self.conn.execute("ALTER TABLE files ADD COLUMN arr_source TEXT")
         if "arr_id" not in columns:
             self.conn.execute("ALTER TABLE files ADD COLUMN arr_id INTEGER")
-        # Separate table for webhook metadata (in case file isn't in DB yet)
+        if "dispatch_token" not in columns:
+            self.conn.execute("ALTER TABLE files ADD COLUMN dispatch_token TEXT")
+        if "dispatched_at" not in columns:
+            self.conn.execute("ALTER TABLE files ADD COLUMN dispatched_at TEXT")
+        if "committing_at" not in columns:
+            self.conn.execute("ALTER TABLE files ADD COLUMN committing_at TEXT")
+        if "needs_gpu" not in columns:
+            self.conn.execute("ALTER TABLE files ADD COLUMN needs_gpu INTEGER NOT NULL DEFAULT 0")
+        if "commit_temp_path" not in columns:
+            self.conn.execute("ALTER TABLE files ADD COLUMN commit_temp_path TEXT")
+        if "commit_target_path" not in columns:
+            self.conn.execute("ALTER TABLE files ADD COLUMN commit_target_path TEXT")
+        if "expected_output_size" not in columns:
+            self.conn.execute("ALTER TABLE files ADD COLUMN expected_output_size INTEGER")
+        if "expected_output_hash" not in columns:
+            self.conn.execute("ALTER TABLE files ADD COLUMN expected_output_hash TEXT")
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS arr_metadata (
                 path TEXT PRIMARY KEY,
@@ -668,6 +897,9 @@ class FileDB:
                 arr_id INTEGER
             )
         """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_files_dispatch ON files(status, next_retry_at, hold_until)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_files_active_library ON files(status, library)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_files_committing_at ON files(status, committing_at)")
         self.conn.commit()
 
     def close(self) -> None:

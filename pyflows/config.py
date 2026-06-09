@@ -52,6 +52,24 @@ class GeneralConfig(BaseModel):
     startup_timeout: int = 600
     failed_retry_hours: int = 24
     metrics_port: int = 9327
+    encode_workers: int = 0
+    gpu_slots: int = 2
+    scan_check_interval: int = 60
+    committing_timeout: int = 3600
+
+    @model_validator(mode="after")
+    def _resolve_and_validate_concurrency(self) -> "GeneralConfig":
+        if self.encode_workers == 0:
+            object.__setattr__(self, "encode_workers", self.workers)
+        if self.encode_workers < 1:
+            raise ValueError("encode_workers must be >= 1")
+        if self.gpu_slots < 1:
+            raise ValueError("gpu_slots must be >= 1")
+        if self.scan_check_interval < 1:
+            raise ValueError("scan_check_interval must be >= 1")
+        if self.committing_timeout < 60:
+            raise ValueError("committing_timeout must be >= 60")
+        return self
 
 
 VideoCodec = Literal["hevc", "av1"]
@@ -115,6 +133,14 @@ class LibraryConfig(BaseModel):
     profile: str
     scan_interval: int = 3600
     extensions: list[str] = ["mkv", "mp4", "avi"]
+    max_concurrent: int = 0
+
+    @field_validator("max_concurrent")
+    @classmethod
+    def _validate_max_concurrent(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("max_concurrent must be >= 0")
+        return v
 
 
 class WebhookConfig(BaseModel):
