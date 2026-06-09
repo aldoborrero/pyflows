@@ -289,6 +289,7 @@ def reset_committing(self) -> int:
             self.conn.execute(
                 "UPDATE files SET status=?, path=?, completed_at=?, "
                 "commit_temp_path=NULL, commit_target_path=NULL, "
+                "expected_output_size=NULL, output_hash=NULL, "
                 "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 WHERE path=?",
                 (FileStatus.COMPLETED, final_path, _utcnow_iso(), path))
             # Clean up old original if extension changed and it still exists
@@ -455,6 +456,8 @@ class DaemonState:
     shutdown: threading.Event = field(default_factory=threading.Event)
     pending_futures: dict = field(default_factory=dict)  # Future -> (path, token)
     futures_lock: threading.Lock = field(default_factory=threading.Lock)
+    admission_enabled: bool = True  # set False during shutdown to block new submissions
+    admission_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
         self.scanning_enabled.set()
@@ -481,8 +484,18 @@ def _needs_gpu(video_codec: str, profile_name: str, config: PyflowsConfig) -> bo
 
 ```python
 def _future_done(future: Future, state: DaemonState) -> None:
+    entry = None
     with state.futures_lock:
-        state.pending_futures.pop(future, None)
+        entry = state.pending_futures.pop(future, None)
+    # If the worker raised an unhandled exception, fail the file
+    exc = future.exception()
+    if exc is not None and entry is not None:
+        path, token = entry
+        try:
+            with FileDB(state.config.general.db_path) as db:
+                db.fail_with_token(path, token, error=f"Unhandled worker exception: {exc}")
+        except Exception:
+            pass  # best-effort; startup recovery handles the rest
 
 def _dispatch_once() -> int:
     state = _get_state()
@@ -530,23 +543,25 @@ def _dispatch_once() -> int:
                 if not db.claim_with_token(path, token, needs_gpu=needs_gpu):
                     continue
 
-                # Check shutdown before submitting
-                if state.shutdown.is_set():
-                    db.release_claim(path, token)
-                    return dispatched
-
-                try:
-                    future = state.executor.submit(_encode_file, path, profile, token)
-                    with state.futures_lock:
-                        state.pending_futures[future] = (path, token)
-                    future.add_done_callback(lambda f: _future_done(f, state))
+                # Atomically check admission and submit
+                with state.admission_lock:
+                    if not state.admission_enabled:
+                        db.release_claim(path, token)
+                        return dispatched
+                    try:
+                        future = state.executor.submit(_encode_file, path, profile, token)
+                        with state.futures_lock:
+                            state.pending_futures[future] = (path, token)
+                        future.add_done_callback(lambda f: _future_done(f, state))
                     dispatched += 1
                     claimed = True
                     break
                 except Exception as exc:
                     db.release_claim(path, token)
-                    log_event(log, logging.ERROR, "dispatch_submit_failed",
-                              "Failed to submit encode", file_path=path, error=str(exc))
+                    except Exception as exc:
+                        db.release_claim(path, token)
+                        log_event(log, logging.ERROR, "dispatch_submit_failed",
+                                  "Failed to submit encode", file_path=path, error=str(exc))
 
             if not claimed:
                 break
@@ -556,12 +571,42 @@ def _dispatch_once() -> int:
 
 - [ ] **Step 5: Write _dispatcher_loop, _scanner_loop, _maintenance_loop**
 
-Same as previous plan versions, using `shutdown.wait(interval)`.
+Same loop structure using `shutdown.wait(interval)`. The maintenance loop additionally reconciles stale COMMITTING records every iteration:
+
+```python
+def _maintenance_loop(shutdown: threading.Event) -> None:
+    ...
+    while not shutdown.is_set():
+        try:
+            _release_held_files()
+            # Reconcile COMMITTING records older than 1 hour (stuck DB finalization)
+            with FileDB(config.general.db_path) as db:
+                db.reset_committing()
+        except Exception as exc:
+            ...
+        shutdown.wait(30)
+```
+
+This handles finding 3 (DB failure after replacement) — the maintenance thread periodically retries the reconciliation.
 
 - [ ] **Step 6: Write _encode_file**
 
 ```python
 def _encode_file(file_path: str, profile_name: str, dispatch_token: str) -> None:
+    """Top-level worker entry. Catches ALL exceptions to prevent capacity leaks."""
+    try:
+        _encode_file_inner(file_path, profile_name, dispatch_token)
+    except Exception as exc:
+        # Last resort: fail the file so capacity is released
+        try:
+            state = _get_state()
+            with FileDB(state.config.general.db_path) as db:
+                db.fail_with_token(file_path, dispatch_token,
+                                   error=f"Unhandled: {exc}")
+        except Exception:
+            pass  # startup recovery handles truly stuck files
+
+def _encode_file_inner(file_path: str, profile_name: str, dispatch_token: str) -> None:
     state = _get_state()
     config = state.config
 
@@ -658,8 +703,8 @@ def _handle_encode_success(db, file_path, temp_output_path,
             db.fail_with_token(file_path, token, error=f"Rename failed: {exc}")
             Path(temp_output_path).unlink(missing_ok=True)
             return
-        # Cross-device: stage beside target, fsync, replace
-        staging = str(Path(target_path).parent / f".{Path(target_path).name}.tmp")
+        # Cross-device: token-specific staging, fsync file+dir, replace
+        staging = str(Path(target_path).parent / f".{Path(target_path).stem}.{token[:8]}.tmp")
         try:
             shutil.copy2(temp_output_path, staging)
             # Flush to disk before atomic replace
@@ -669,6 +714,12 @@ def _handle_encode_success(db, file_path, temp_output_path,
             finally:
                 os.close(fd)
             os.replace(staging, target_path)
+            # Directory fsync for rename durability
+            dir_fd = os.open(str(Path(target_path).parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         except OSError as copy_exc:
             Path(staging).unlink(missing_ok=True)
             db.fail_with_token(file_path, token, error=f"Cross-device copy failed: {copy_exc}")
@@ -771,14 +822,18 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
     # 4. Wait for workers to finish
     # 5. Join remaining threads and cleanup
 
-    # Step 1: join all control-plane threads (dispatcher, scanner, maintenance)
+    # Step 1: disable admission (prevents new submissions even if dispatcher is mid-loop)
+    with state.admission_lock:
+        state.admission_enabled = False
+
+    # Step 2: join all control-plane threads (dispatcher, scanner, maintenance)
     for t in threads:
         t.join(timeout=10)
         if t.is_alive():
-            log_event(log, logging.WARNING, "thread_join_timeout",
-                      f"Thread {t.name} did not stop within timeout")
+            log_event(log, logging.ERROR, "thread_join_timeout",
+                      f"Thread {t.name} did not stop — shutdown may be incomplete")
 
-    # Step 2: cancel unstarted futures and release their DB claims
+    # Step 3: cancel unstarted futures and release their DB claims
     with state.futures_lock:
         snapshot = dict(state.pending_futures)
         state.pending_futures.clear()
@@ -787,13 +842,13 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
             with FileDB(config.general.db_path) as db:
                 db.release_claim(path, token)
 
-    # Step 3: terminate running FFmpeg
+    # Step 4: terminate running FFmpeg
     terminate_active_encode()
 
-    # Step 4: wait for running workers to finish
+    # Step 5: wait for running workers to finish
     executor.shutdown(wait=True, cancel_futures=False)
 
-    # Step 5: cleanup
+    # Step 6: cleanup
     if handler:
         handler.stop()
     if observer:
