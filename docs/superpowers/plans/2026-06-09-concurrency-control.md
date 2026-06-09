@@ -6,7 +6,9 @@
 
 **Architecture:** Replace the current "Huey does everything" model with dedicated threads for scanning, maintenance, and dispatch. A central dispatcher owns all scheduling decisions: it claims pending files with a unique lease token, checks capacity (worker slots, GPU slots, per-library limits), and enqueues Huey encode tasks. Workers verify lease ownership before encoding. Multiple FFmpeg processes are tracked in a registry for clean shutdown.
 
-**Tech Stack:** Python threading, SQLite (existing WAL mode), Huey (encode-only), `threading.BoundedSemaphore` (GPU slots), UUID lease tokens
+**Tech Stack:** Python threading, SQLite (existing WAL mode), Huey (encode-only), `threading.BoundedSemaphore` (GPU slots), UUID fencing tokens
+
+**Terminology:** Tokens in this plan are *fencing tokens* (attempt identifiers), not leases. There is no expiry or heartbeat. Stale attempts are recovered at startup via `reset_processing()`. This is appropriate for a single-daemon, single-host system.
 
 ---
 
@@ -58,7 +60,12 @@ This eliminates both stale-task replay and concurrent-delivery races.
 
 **Problem:** GPU semaphore in workers blocks them while CPU-only work is queued.
 
-**Solution:** The dispatcher tracks GPU usage from DB. Add `needs_gpu` column (or derive from `video_codec` + profile `skip_codecs`): if the file's codec is NOT in skip_codecs AND profile encoder is "vaapi", it needs GPU. Dispatcher counts active GPU claims (`WHERE needs_gpu=1 AND status='processing'`) and skips GPU jobs when `gpu_slots` is reached. CPU-only jobs (remux/copy) dispatch freely.
+**Solution:** The dispatcher persists `needs_gpu` when claiming. The value is computed per-file using `_needs_gpu(video_codec, profile_name, config)` which checks the file's specific profile's `skip_codecs` and `encoder`. GPU filtering is NOT done in SQL (cross-profile skip_codecs aggregation would be incorrect). Instead the dispatcher:
+
+1. Fetches the next candidate via standard priority query.
+2. Evaluates `_needs_gpu()` using the file's own profile.
+3. If `needs_gpu=True` and `gpu_processing_count() >= gpu_slots`, skips this candidate and tries the next.
+4. If `needs_gpu=False`, dispatches regardless of GPU state.
 
 The worker BoundedSemaphore remains as a safety net but should never block under normal dispatch.
 
@@ -128,6 +135,13 @@ def _resolve_and_validate_concurrency(self) -> "GeneralConfig":
 
 ```python
 max_concurrent: int = 0  # 0 = unlimited
+
+@field_validator("max_concurrent")
+@classmethod
+def _validate_max_concurrent(cls, v: int) -> int:
+    if v < 0:
+        raise ValueError("max_concurrent must be >= 0")
+    return v
 ```
 
 - [ ] **Step 3: Build and verify**
@@ -244,7 +258,41 @@ def skip_with_token(self, path: str, token: str) -> bool:
     return cur.rowcount > 0
 ```
 
-- [ ] **Step 6: Add library_processing_counts and gpu_processing_count**
+- [ ] **Step 6: Add retry_with_token and rename_with_token**
+
+```python
+def retry_with_token(self, path: str, token: str, error: str,
+                     retry_count: int, next_retry_at: datetime) -> bool:
+    cur = self.conn.execute(
+        "UPDATE files SET status=?, error=?, retry_count=?, next_retry_at=?, "
+        "started_at=NULL, completed_at=NULL, dispatch_token=NULL, "
+        "dispatched_at=NULL, needs_gpu=0 "
+        "WHERE path=? AND dispatch_token=?",
+        (FileStatus.PENDING, error, retry_count, next_retry_at.isoformat(),
+         path, token),
+    )
+    self.conn.commit()
+    return cur.rowcount > 0
+
+def rename_with_token(self, old_path: str, new_path: str, token: str) -> bool:
+    cur = self.conn.execute(
+        "UPDATE files SET path=? WHERE path=? AND dispatch_token=?",
+        (new_path, old_path, token),
+    )
+    self.conn.commit()
+    return cur.rowcount > 0
+
+def transition_to_committing(self, path: str, token: str) -> bool:
+    cur = self.conn.execute(
+        "UPDATE files SET status='committing' "
+        "WHERE path=? AND dispatch_token=? AND status=?",
+        (path, token, FileStatus.PROCESSING),
+    )
+    self.conn.commit()
+    return cur.rowcount > 0
+```
+
+- [ ] **Step 7: Add library_processing_counts and gpu_processing_count**
 
 ```python
 def library_processing_counts(self) -> dict[str, int]:
@@ -610,30 +658,39 @@ def _dispatch_once() -> int:
         active = db.count_by_status(FileStatus.PROCESSING)
         capacity = config.general.encode_workers - active
 
+        skipped_paths: set[str] = set()
+
         for _ in range(max(0, capacity)):
-            # Re-query per-library and GPU counts each iteration
+            # Re-query counts each iteration (per-claim, not per-batch)
             lib_counts = db.library_processing_counts() if lib_limits else {}
             gpu_active = db.gpu_processing_count()
-            gpu_full = gpu_active >= config.general.gpu_slots
 
             saturated = {name for name, limit in lib_limits.items()
                          if lib_counts.get(name, 0) >= limit}
 
-            # Use a query that excludes GPU-needing files when GPU is full
-            best = db.get_next_dispatchable(
-                exclude_libraries=saturated or None,
-                exclude_gpu=gpu_full,
-                priority_codecs=config.resolved_priority_codecs(),
-                config=config,
-            )
+            # Fetch candidates, skipping already-evaluated paths
+            if saturated:
+                best = db.get_next_pending_excluding_libraries(
+                    saturated, priority_codecs=config.resolved_priority_codecs())
+            else:
+                best = db.get_next_pending(
+                    priority_codecs=config.resolved_priority_codecs())
 
             if best is None:
                 break
 
             path = str(best["path"])
+            if path in skipped_paths:
+                break  # all remaining candidates already evaluated
+
             profile = str(best["profile"])
             codec = str(best.get("video_codec", ""))
             needs_gpu = _needs_gpu(codec, profile, config)
+
+            # GPU admission: per-file check using the file's own profile
+            if needs_gpu and gpu_active >= config.general.gpu_slots:
+                skipped_paths.add(path)
+                continue  # try next candidate (may be CPU-only)
 
             token = uuid.uuid4().hex
 
@@ -725,6 +782,8 @@ def _encode_file(file_path: str, profile_name: str, dispatch_token: str = "") ->
             startup_timeout=config.general.startup_timeout,
             gpu_semaphore=state.gpu_semaphore,
             registry_key=dispatch_token,
+            replace_original=False,  # caller handles fenced commit
+            registry_key=dispatch_token,
         )
     except Exception as exc:
         with FileDB(config.general.db_path) as db:
@@ -750,18 +809,27 @@ def _encode_file(file_path: str, profile_name: str, dispatch_token: str = "") ->
                                    profile_name, config, notifier, dispatch_token)
 ```
 
-Note: `_handle_encode_success` and `_handle_encode_failure` must also be updated to accept `dispatch_token` and use token-guarded methods:
+Note: `_handle_encode_success` and `_handle_encode_failure` must accept `dispatch_token` and use token-guarded methods.
 - `db.update_status(COMPLETED)` → `db.complete_with_token(path, token, ...)`
 - `db.update_status(FAILED)` → `db.fail_with_token(path, token, ...)`
 - `db.schedule_retry(...)` → `db.retry_with_token(path, token, ...)`
 - `db.rename_path(old, new)` → `db.rename_with_token(old, new, token)`
 
-**Critical: filesystem replacement must check ownership before committing.**
-In `_handle_encode_success`, verify ownership BEFORE calling `pipeline.encode_file`'s file replacement. Since `encode_file` in `pipeline.py` handles the file move internally, the ownership check must happen in `pipeline.py` itself — or the file replacement must be moved out of `pipeline.py` into `_handle_encode_success` where the token is available.
+**Critical: fenced filesystem commit via COMMITTING state.**
 
-Recommended approach: `encode_file()` returns `EncodeResult` with `output_path` (the temp file) but does NOT replace the original. `_handle_encode_success` verifies token ownership, THEN does the atomic file replacement. This ensures a stale worker can't overwrite the newer attempt's file.
+A token check followed by a file rename has a TOCTOU race. The solution:
 
-This requires changing `encode_file()` to have a `replace_original=False` mode where it returns the temp file path instead of replacing in-place. The caller handles replacement after token verification.
+1. `encode_file(replace_original=False)` returns temp output path without replacing the original.
+2. `_handle_encode_success` atomically transitions to COMMITTING: `UPDATE SET status='committing' WHERE path=? AND dispatch_token=? AND status='processing'`. If this fails, the worker abandons the temp file.
+3. Only after COMMITTING succeeds does the worker perform the filesystem rename.
+4. After rename, transition to COMPLETED via `complete_with_token`.
+5. `reset_processing()` does NOT reset COMMITTING files. A separate `reset_committing()` handles abandoned commits at startup.
+
+Add `COMMITTING = "committing"` to `FileStatus`. Update `VALID_TRANSITIONS`:
+```python
+FileStatus.PROCESSING: {..., FileStatus.COMMITTING},
+FileStatus.COMMITTING: {FileStatus.COMPLETED, FileStatus.FAILED},
+```
 
 - [ ] **Step 3: Add GPU semaphore to DaemonState**
 
@@ -816,12 +884,39 @@ Remove `encode_task` parameter from `start_webhook_server()`. In `_queue_encode(
 try:
     shutdown.wait()
 finally:
-    shutdown.set()  # wake all threads
+    shutdown.set()
+    terminate_active_encode()  # SIGTERM all active FFmpeg processes
     consumer.stop()
     for t in [scanner_thread, maintenance_thread, dispatcher_thread]:
         if t is not None:
             t.join(timeout=10)
-    # ... observer, webhook, metrics cleanup ...
+    if handler is not None:
+        handler.stop()
+    if observer is not None:
+        observer.stop()
+        observer.join(timeout=10)
+    if webhook_server is not None:
+        webhook_server.shutdown()
+    if metrics_stop is not None:
+        metrics_stop.set()
+    log_event(log, logging.INFO, "daemon_stopped", "pyflows daemon stopped")
+```
+
+Update `ProcessRegistry.terminate_all()` to SIGTERM, wait, then SIGKILL:
+```python
+def terminate_all(self) -> None:
+    with self._lock:
+        procs = list(self._procs.values())
+    for proc in procs:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    for proc in procs:
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 ```
 
 - [ ] **Step 4: Build and fix issues**
@@ -836,19 +931,25 @@ git commit -m "feat(tasks): wire dispatcher architecture into start_daemon"
 
 ---
 
-### Task 7: GPU semaphore in pipeline
+### Task 7: Pipeline changes (GPU semaphore, registry key, deferred replacement)
 
 **Files:**
 - Modify: `pyflows/pipeline.py`
 
-- [ ] **Step 1: Add gpu_semaphore parameter to encode_file**
+- [ ] **Step 1: Add all new parameters to encode_file**
 
 ```python
 def encode_file(
     ...,
     gpu_semaphore: threading.BoundedSemaphore | None = None,
+    registry_key: str = "",
+    replace_original: bool = True,
 ) -> EncodeResult:
 ```
+
+When `replace_original=False`, skip file replacement logic and return `EncodeResult` with `final_path` set to the temp output file. The caller handles the fenced COMMITTING transition.
+
+Pass `registry_key` to `FFmpegCommand.run(registry_key=registry_key)` so ProcessRegistry/ProgressRegistry use the fencing token.
 
 - [ ] **Step 2: Acquire/release around VAAPI encode with try/finally**
 
@@ -952,7 +1053,61 @@ Run: `nix build .#packages.x86_64-linux.default`
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "test: add dispatcher, lease token, and admission control tests"
+git commit -m "test: add dispatcher, fencing token, and admission control tests"
+```
+
+---
+
+### Task 9: Crash recovery
+
+**Files:**
+- Modify: `pyflows/tasks.py`, `pyflows/db.py`
+
+- [ ] **Step 1: Add reset_committing to db.py**
+
+```python
+def reset_committing(self) -> int:
+    cur = self.conn.execute(
+        "UPDATE files SET status=?, error='interrupted during commit', "
+        "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 "
+        "WHERE status='committing'",
+        (FileStatus.FAILED,),
+    )
+    self.conn.commit()
+    return cur.rowcount
+```
+
+- [ ] **Step 2: Update reset_processing to clear dispatch fields**
+
+```python
+def reset_processing(self) -> int:
+    cur = self.conn.execute(
+        "UPDATE files SET status=?, started_at=NULL, dispatched_at=NULL, "
+        "dispatch_token=NULL, needs_gpu=0 WHERE status=?",
+        (FileStatus.PENDING, FileStatus.PROCESSING),
+    )
+    self.conn.commit()
+    return cur.rowcount
+```
+
+- [ ] **Step 3: Call both in start_daemon startup sequence**
+
+```python
+with FileDB(config.general.db_path) as db:
+    reset = db.reset_processing()
+    if reset > 0:
+        log_event(log, logging.INFO, "processing_reset", count=reset)
+    committed = db.reset_committing()
+    if committed > 0:
+        log_event(log, logging.WARNING, "committing_reset", count=committed)
+```
+
+Stale Huey tasks from previous runs are harmless — `start_encode()` rejects them (token cleared by reset).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git commit -m "feat(tasks): crash recovery for COMMITTING state"
 ```
 
 ---
