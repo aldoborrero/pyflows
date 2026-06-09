@@ -136,7 +136,7 @@ if "expected_output_size" not in columns:
 
 Update `FileRecord` TypedDict accordingly. Add `COMMITTING = "committing"` to `FileStatus`. Update `VALID_TRANSITIONS`:
 ```python
-FileStatus.PROCESSING: {FileStatus.COMPLETED, FileStatus.FAILED, FileStatus.SKIPPED, FileStatus.COMMITTING, FileStatus.PENDING},
+FileStatus.PROCESSING: {FileStatus.FAILED, FileStatus.SKIPPED, FileStatus.COMMITTING, FileStatus.PENDING},
 FileStatus.COMMITTING: {FileStatus.COMPLETED, FileStatus.FAILED},
 ```
 
@@ -212,7 +212,7 @@ def retry_with_token(self, path: str, token: str, error: str,
     ...WHERE path=? AND dispatch_token=? AND status='processing'
 
 def rename_with_token(self, old_path: str, new_path: str, token: str) -> bool:
-    ...WHERE path=? AND dispatch_token=?
+    ...WHERE path=? AND dispatch_token=? AND status='committing'
 ```
 
 - [ ] **Step 6: Capacity counting methods**
@@ -267,11 +267,16 @@ def reset_committing(self) -> int:
         target_ok = (target and Path(target).exists() and
                      expected_size and Path(target).stat().st_size == expected_size)
         if target_ok:
+            # Rename succeeded — update path to target if different (extension change)
+            final_path = target if target != path else path
             self.conn.execute(
-                "UPDATE files SET status=?, completed_at=?, "
+                "UPDATE files SET status=?, path=?, completed_at=?, "
                 "commit_temp_path=NULL, commit_target_path=NULL, "
-                "dispatch_token=NULL WHERE path=?",
-                (FileStatus.COMPLETED, _utcnow_iso(), path))
+                "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 WHERE path=?",
+                (FileStatus.COMPLETED, final_path, _utcnow_iso(), path))
+            # Clean up old original if extension changed and it still exists
+            if target != path and Path(path).exists():
+                Path(path).unlink(missing_ok=True)
         else:
             if temp and Path(temp).exists():
                 Path(temp).unlink(missing_ok=True)
@@ -430,6 +435,8 @@ class DaemonState:
     watcher_enabled: threading.Event = field(default_factory=threading.Event)
     gpu_semaphore: threading.BoundedSemaphore = field(init=False)
     shutdown: threading.Event = field(default_factory=threading.Event)
+    pending_futures: dict = field(default_factory=dict)  # Future -> (path, token)
+    futures_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
         self.scanning_enabled.set()
@@ -455,6 +462,10 @@ def _needs_gpu(video_codec: str, profile_name: str, config: PyflowsConfig) -> bo
 - [ ] **Step 4: Write _dispatch_once**
 
 ```python
+def _future_done(future: Future, state: DaemonState) -> None:
+    with state.futures_lock:
+        state.pending_futures.pop(future, None)
+
 def _dispatch_once() -> int:
     state = _get_state()
     config = state.config
@@ -500,7 +511,10 @@ def _dispatch_once() -> int:
                     continue
 
                 try:
-                    state.executor.submit(_encode_file, path, profile, token)
+                    future = state.executor.submit(_encode_file, path, profile, token)
+                    with state.futures_lock:
+                        state.pending_futures[future] = (path, token)
+                    future.add_done_callback(lambda f: _future_done(f, state))
                     dispatched += 1
                     claimed = True
                     break
@@ -610,22 +624,44 @@ def _handle_encode_success(db, file_path, temp_output_path,
     # Filesystem rename (COMMITTING state protects this)
     try:
         os.rename(temp_output_path, target_path)
-    except OSError:
-        # Cross-device: copy + replace
-        ...
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            db.fail_with_token(file_path, token, error=f"Rename failed: {exc}")
+            Path(temp_output_path).unlink(missing_ok=True)
+            return
+        # Cross-device: stage beside target, fsync, replace
+        staging = str(Path(target_path).parent / f".{Path(target_path).name}.tmp")
+        try:
+            shutil.copy2(temp_output_path, staging)
+            os.replace(staging, target_path)
+        except OSError as copy_exc:
+            Path(staging).unlink(missing_ok=True)
+            db.fail_with_token(file_path, token, error=f"Cross-device copy failed: {copy_exc}")
+            Path(temp_output_path).unlink(missing_ok=True)
+            return
+        Path(temp_output_path).unlink(missing_ok=True)
 
     # Update path if extension changed
+    final_path = target_path
     if target_path != file_path:
-        db.rename_with_token(file_path, target_path, token)
+        if not db.rename_with_token(file_path, target_path, token):
+            return  # lost ownership
         if Path(file_path).exists():
             os.unlink(file_path)
 
-    new_hash = compute_file_hash(target_path)
-    db.update_hash(target_path, new_hash, output_size)
-    db.complete_with_token(target_path, token,
-                           output_codec=profile.video.codec, output_size=output_size)
-    notifier.on_success(target_path, ...)
-    run_hooks(config.hooks.post_encode, ...)
+    new_hash = compute_file_hash(final_path)
+    db.update_hash(final_path, new_hash, output_size)
+    if not db.complete_with_token(final_path, token,
+                                  output_codec=profile.video.codec,
+                                  output_size=output_size):
+        return  # lost ownership — do not notify
+
+    # Only notify/hook after successful DB commit
+    arr_source, arr_id = db.get_arr_metadata(final_path)
+    notifier.on_success(final_path, arr_source=arr_source, arr_id=arr_id)
+    run_hooks(config.hooks.post_encode, "post_encode", final_path,
+              profile=profile_name, output_path=final_path, status="completed",
+              timeout=config.hooks.timeout)
 ```
 
 - [ ] **Step 8: Update _handle_encode_failure with token**
@@ -693,11 +729,31 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
     # Block until shutdown
     shutdown.wait()
 
-    # Ordered shutdown
-    terminate_active_encode()
-    executor.shutdown(wait=True, cancel_futures=True)
+    # Ordered shutdown:
+    # 1. Stop dispatcher first (prevents new submissions)
+    # 2. Cancel unstarted futures and release their claims
+    # 3. Terminate running FFmpeg processes
+    # 4. Wait for workers to finish
+    # 5. Join remaining threads and cleanup
+
+    # Step 1: join dispatcher so no new work is submitted
     for t in threads:
         t.join(timeout=10)
+
+    # Step 2: cancel unstarted futures and release their DB claims
+    for future, (path, token) in list(state.pending_futures.items()):
+        if future.cancel():
+            with FileDB(config.general.db_path) as db:
+                db.release_claim(path, token)
+    state.pending_futures.clear()
+
+    # Step 3: terminate running FFmpeg
+    terminate_active_encode()
+
+    # Step 4: wait for running workers to finish
+    executor.shutdown(wait=True, cancel_futures=False)
+
+    # Step 5: cleanup
     if handler:
         handler.stop()
     if observer:
