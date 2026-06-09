@@ -230,8 +230,9 @@ def complete_with_token(self, path: str, token: str,
     cur = self.conn.execute(
         "UPDATE files SET status=?, output_codec=?, output_size=?, completed_at=?, "
         "retry_count=0, next_retry_at=NULL, hold_until=NULL, "
-        "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 "
-        "WHERE path=? AND dispatch_token=?",
+        "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0, "
+        "commit_temp_path=NULL, commit_target_path=NULL "
+        "WHERE path=? AND dispatch_token=? AND status='committing'",
         (FileStatus.COMPLETED, output_codec, output_size, _utcnow_iso(), path, token),
     )
     self.conn.commit()
@@ -251,8 +252,8 @@ def skip_with_token(self, path: str, token: str) -> bool:
     cur = self.conn.execute(
         "UPDATE files SET status=?, completed_at=?, "
         "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 "
-        "WHERE path=? AND dispatch_token=?",
-        (FileStatus.SKIPPED, _utcnow_iso(), path, token),
+        "WHERE path=? AND dispatch_token=? AND status=?",
+        (FileStatus.SKIPPED, _utcnow_iso(), path, token, FileStatus.PROCESSING),
     )
     self.conn.commit()
     return cur.rowcount > 0
@@ -292,25 +293,45 @@ def transition_to_committing(self, path: str, token: str) -> bool:
     return cur.rowcount > 0
 ```
 
-- [ ] **Step 7: Add library_processing_counts and gpu_processing_count**
+- [ ] **Step 7: Add capacity counting methods (include COMMITTING)**
 
 ```python
-def library_processing_counts(self) -> dict[str, int]:
+def count_by_statuses(self, statuses: tuple[str, ...]) -> int:
+    placeholders = ",".join("?" for _ in statuses)
+    row = self.conn.execute(
+        f"SELECT count(*) FROM files WHERE status IN ({placeholders})", statuses
+    ).fetchone()
+    return row[0]
+
+def library_active_counts(self, statuses: tuple[str, ...]) -> dict[str, int]:
+    placeholders = ",".join("?" for _ in statuses)
     rows = self.conn.execute(
-        "SELECT library, count(*) FROM files WHERE status=? GROUP BY library",
-        (FileStatus.PROCESSING,),
+        f"SELECT library, count(*) FROM files WHERE status IN ({placeholders}) GROUP BY library",
+        statuses,
     ).fetchall()
     return {str(row[0]): row[1] for row in rows}
 
-def gpu_processing_count(self) -> int:
+def gpu_active_count(self, statuses: tuple[str, ...]) -> int:
+    placeholders = ",".join("?" for _ in statuses)
     row = self.conn.execute(
-        "SELECT count(*) FROM files WHERE status=? AND needs_gpu=1",
-        (FileStatus.PROCESSING,),
+        f"SELECT count(*) FROM files WHERE status IN ({placeholders}) AND needs_gpu=1",
+        statuses,
     ).fetchone()
     return row[0]
+
+def get_pending_batch(
+    self,
+    exclude_libraries: set[str] | None = None,
+    priority_codecs: list[str] | None = None,
+    limit: int = 20,
+) -> list[FileRecord]:
+    """Fetch a batch of pending files in priority order for the dispatcher."""
+    # Same query as get_next_pending but returns multiple rows
+    # and supports library exclusion
+    ...  # implementation mirrors get_next_pending with LIMIT=limit
 ```
 
-- [ ] **Step 7: Add get_next_dispatchable (unified dispatch query)**
+- [ ] **Step 8: Add get_next_pending_excluding_libraries**
 
 Replaces both `get_next_pending` and `get_next_pending_excluding_libraries` for dispatch. Accepts `exclude_libraries`, `exclude_gpu`, and `priority_codecs`. Builds conditions dynamically:
 
@@ -655,56 +676,59 @@ def _dispatch_once() -> int:
                   if lib.max_concurrent > 0}
 
     with FileDB(config.general.db_path) as db:
-        active = db.count_by_status(FileStatus.PROCESSING)
+        active_statuses = ("processing", "committing")
+        active = db.count_by_statuses(active_statuses)
         capacity = config.general.encode_workers - active
-
-        skipped_paths: set[str] = set()
 
         for _ in range(max(0, capacity)):
             # Re-query counts each iteration (per-claim, not per-batch)
-            lib_counts = db.library_processing_counts() if lib_limits else {}
-            gpu_active = db.gpu_processing_count()
+            # Count both PROCESSING and COMMITTING for capacity
+            lib_counts = db.library_active_counts(active_statuses) if lib_limits else {}
+            gpu_active = db.gpu_active_count(active_statuses)
 
             saturated = {name for name, limit in lib_limits.items()
                          if lib_counts.get(name, 0) >= limit}
 
-            # Fetch candidates, skipping already-evaluated paths
-            if saturated:
-                best = db.get_next_pending_excluding_libraries(
-                    saturated, priority_codecs=config.resolved_priority_codecs())
-            else:
-                best = db.get_next_pending(
-                    priority_codecs=config.resolved_priority_codecs())
+            # Fetch a batch of candidates in priority order
+            candidates = db.get_pending_batch(
+                exclude_libraries=saturated or None,
+                priority_codecs=config.resolved_priority_codecs(),
+                limit=20,
+            )
 
-            if best is None:
+            if not candidates:
                 break
 
-            path = str(best["path"])
-            if path in skipped_paths:
-                break  # all remaining candidates already evaluated
+            # Find the first candidate that passes GPU admission
+            claimed = False
+            for candidate in candidates:
+                path = str(candidate["path"])
+                profile = str(candidate["profile"])
+                codec = str(candidate.get("video_codec", ""))
+                needs_gpu = _needs_gpu(codec, profile, config)
 
-            profile = str(best["profile"])
-            codec = str(best.get("video_codec", ""))
-            needs_gpu = _needs_gpu(codec, profile, config)
-
-            # GPU admission: per-file check using the file's own profile
-            if needs_gpu and gpu_active >= config.general.gpu_slots:
-                skipped_paths.add(path)
-                continue  # try next candidate (may be CPU-only)
+                if needs_gpu and gpu_active >= config.general.gpu_slots:
+                    continue  # skip GPU file, try next (may be CPU-only)
 
             token = uuid.uuid4().hex
 
-            if not db.claim_with_token(path, token, needs_gpu=needs_gpu):
-                continue
+                token = uuid.uuid4().hex
+                if not db.claim_with_token(path, token, needs_gpu=needs_gpu):
+                    continue
 
-            try:
-                state.encode_task(path, profile, token)
-                dispatched += 1
-            except Exception as exc:
-                db.release_claim(path, token)
-                log_event(log, logging.ERROR, "dispatch_enqueue_failed",
-                          "Failed to enqueue encode task, releasing claim",
-                          file_path=path, error=str(exc))
+                try:
+                    state.encode_task(path, profile, token)
+                    dispatched += 1
+                    claimed = True
+                    break  # claimed one, re-enter outer loop for fresh counts
+                except Exception as exc:
+                    db.release_claim(path, token)
+                    log_event(log, logging.ERROR, "dispatch_enqueue_failed",
+                              "Failed to enqueue encode task, releasing claim",
+                              file_path=path, error=str(exc))
+
+            if not claimed:
+                break  # no dispatchable candidate found in batch
 
     return dispatched
 ```
@@ -730,23 +754,26 @@ def _encode_file(file_path: str, profile_name: str, dispatch_token: str = "") ->
     state = _get_state()
     config = state.config
 
+    # Reject tasks without a fencing token (stale pre-upgrade Huey tasks)
+    if not dispatch_token:
+        log_event(log, logging.WARNING, "encode_no_token",
+                  "Rejecting encode task without fencing token", file_path=file_path)
+        return
+
     # Pause handling: release claim and return
     if not state.encoding_enabled.is_set():
-        if dispatch_token:
-            with FileDB(config.general.db_path) as db:
+        with FileDB(config.general.db_path) as db:
                 db.release_claim(file_path, dispatch_token)
         return
 
     if profile_name not in config.profiles:
-        if dispatch_token:
-            with FileDB(config.general.db_path) as db:
-                db.fail_with_token(file_path, dispatch_token, error=f"Unknown profile: {profile_name}")
+        with FileDB(config.general.db_path) as db:
+            db.fail_with_token(file_path, dispatch_token, error=f"Unknown profile: {profile_name}")
         return
 
     # Atomic worker start (prevents duplicate delivery)
-    if dispatch_token:
-        with FileDB(config.general.db_path) as db:
-            if not db.start_encode(file_path, dispatch_token):
+    with FileDB(config.general.db_path) as db:
+        if not db.start_encode(file_path, dispatch_token):
                 log_event(log, logging.DEBUG, "encode_start_failed",
                           "Could not start encode (stale token or duplicate delivery)",
                           file_path=file_path)
@@ -782,8 +809,7 @@ def _encode_file(file_path: str, profile_name: str, dispatch_token: str = "") ->
             startup_timeout=config.general.startup_timeout,
             gpu_semaphore=state.gpu_semaphore,
             registry_key=dispatch_token,
-            replace_original=False,  # caller handles fenced commit
-            registry_key=dispatch_token,
+            replace_original=False,
         )
     except Exception as exc:
         with FileDB(config.general.db_path) as db:
@@ -917,6 +943,7 @@ def terminate_all(self) -> None:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait()  # reap zombie
 ```
 
 - [ ] **Step 4: Build and fix issues**
@@ -1063,18 +1090,59 @@ git commit -m "test: add dispatcher, fencing token, and admission control tests"
 **Files:**
 - Modify: `pyflows/tasks.py`, `pyflows/db.py`
 
-- [ ] **Step 1: Add reset_committing to db.py**
+- [ ] **Step 1: Add commit metadata columns and reset_committing to db.py**
 
+Add `commit_temp_path` and `commit_target_path` columns to track the filesystem commit state. These are set when transitioning to COMMITTING and cleared on completion.
+
+In `transition_to_committing`:
 ```python
-def reset_committing(self) -> int:
+def transition_to_committing(self, path: str, token: str,
+                              temp_path: str, target_path: str) -> bool:
     cur = self.conn.execute(
-        "UPDATE files SET status=?, error='interrupted during commit', "
-        "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 "
-        "WHERE status='committing'",
-        (FileStatus.FAILED,),
+        "UPDATE files SET status='committing', "
+        "commit_temp_path=?, commit_target_path=? "
+        "WHERE path=? AND dispatch_token=? AND status=?",
+        (temp_path, target_path, path, token, FileStatus.PROCESSING),
     )
     self.conn.commit()
-    return cur.rowcount
+    return cur.rowcount > 0
+```
+
+`reset_committing` reconciles filesystem state:
+```python
+def reset_committing(self) -> int:
+    rows = self.conn.execute(
+        "SELECT path, commit_temp_path, commit_target_path FROM files "
+        "WHERE status='committing'"
+    ).fetchall()
+    count = 0
+    for row in rows:
+        path = row[0]
+        target = row[2]
+        # If target exists, the rename succeeded before crash → mark completed
+        if target and Path(target).exists():
+            self.conn.execute(
+                "UPDATE files SET status=?, completed_at=?, "
+                "commit_temp_path=NULL, commit_target_path=NULL, "
+                "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 "
+                "WHERE path=?",
+                (FileStatus.COMPLETED, _utcnow_iso(), path),
+            )
+        else:
+            # Rename didn't happen → mark failed, clean temp
+            temp = row[1]
+            if temp and Path(temp).exists():
+                Path(temp).unlink(missing_ok=True)
+            self.conn.execute(
+                "UPDATE files SET status=?, error='interrupted during commit', "
+                "commit_temp_path=NULL, commit_target_path=NULL, "
+                "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 "
+                "WHERE path=?",
+                (FileStatus.FAILED, path),
+            )
+        count += 1
+    self.conn.commit()
+    return count
 ```
 
 - [ ] **Step 2: Update reset_processing to clear dispatch fields**
