@@ -132,6 +132,8 @@ if "commit_target_path" not in columns:
     self.conn.execute("ALTER TABLE files ADD COLUMN commit_target_path TEXT")
 if "expected_output_size" not in columns:
     self.conn.execute("ALTER TABLE files ADD COLUMN expected_output_size INTEGER")
+if "output_hash" not in columns:
+    self.conn.execute("ALTER TABLE files ADD COLUMN output_hash TEXT")
 ```
 
 Update `FileRecord` TypedDict accordingly. Add `COMMITTING = "committing"` to `FileStatus`. Update `VALID_TRANSITIONS`:
@@ -189,9 +191,12 @@ Each enforces the required source status:
 ```python
 def transition_to_committing(self, path: str, token: str,
                               temp_path: str, target_path: str,
-                              expected_size: int) -> bool:
+                              expected_size: int, output_hash: str = "") -> bool:
     # requires status=PROCESSING
-    ...WHERE path=? AND dispatch_token=? AND status='processing'
+    # stores temp_path, target_path, expected_size, output_hash for crash recovery
+    ...SET status='committing', commit_temp_path=?, commit_target_path=?,
+       expected_output_size=?, output_hash=?
+       WHERE path=? AND dispatch_token=? AND status='processing'
 
 def complete_with_token(self, path: str, token: str, ...) -> bool:
     # requires status=COMMITTING
@@ -200,7 +205,11 @@ def complete_with_token(self, path: str, token: str, ...) -> bool:
 
 def fail_with_token(self, path: str, token: str, error: str) -> bool:
     # allows PROCESSING or COMMITTING
-    ...WHERE path=? AND dispatch_token=? AND status IN ('processing','committing')
+    # clears ALL dispatch and commit metadata
+    ...SET status=FAILED, error=?, completed_at=?, dispatch_token=NULL,
+       dispatched_at=NULL, needs_gpu=0, commit_temp_path=NULL,
+       commit_target_path=NULL, expected_output_size=NULL, output_hash=NULL
+       WHERE path=? AND dispatch_token=? AND status IN ('processing','committing')
 
 def skip_with_token(self, path: str, token: str) -> bool:
     # requires PROCESSING
@@ -257,15 +266,23 @@ def reset_processing(self) -> int:
 
 def reset_committing(self) -> int:
     rows = self.conn.execute(
-        "SELECT path, commit_temp_path, commit_target_path, expected_output_size "
+        "SELECT path, commit_temp_path, commit_target_path, "
+        "expected_output_size, output_hash "
         "FROM files WHERE status='committing'"
     ).fetchall()
     count = 0
     for row in rows:
-        path, temp, target, expected_size = row[0], row[1], row[2], row[3]
-        # Check if target has the expected output size (rename succeeded)
-        target_ok = (target and Path(target).exists() and
-                     expected_size and Path(target).stat().st_size == expected_size)
+        path, temp, target = row[0], row[1], row[2]
+        expected_size, expected_hash = row[3], row[4]
+        # Verify target exists with matching size AND hash
+        target_ok = False
+        if target and Path(target).exists() and expected_size:
+            actual_size = Path(target).stat().st_size
+            if actual_size == expected_size:
+                if expected_hash:
+                    target_ok = compute_file_hash(target) == expected_hash
+                else:
+                    target_ok = True  # fallback: size-only if no hash stored
         if target_ok:
             # Rename succeeded — update path to target if different (extension change)
             final_path = target if target != path else path
@@ -283,7 +300,8 @@ def reset_committing(self) -> int:
             self.conn.execute(
                 "UPDATE files SET status=?, error='interrupted during commit', "
                 "commit_temp_path=NULL, commit_target_path=NULL, "
-                "dispatch_token=NULL WHERE path=?",
+                "expected_output_size=NULL, output_hash=NULL, "
+                "dispatch_token=NULL, dispatched_at=NULL, needs_gpu=0 WHERE path=?",
                 (FileStatus.FAILED, path))
         count += 1
     self.conn.commit()
@@ -482,6 +500,8 @@ def _dispatch_once() -> int:
         capacity = config.general.encode_workers - active
 
         for _ in range(max(0, capacity)):
+            if state.shutdown.is_set():
+                break
             lib_counts = db.library_active_counts() if lib_limits else {}
             gpu_active = db.gpu_active_count()
 
@@ -509,6 +529,11 @@ def _dispatch_once() -> int:
                 token = uuid.uuid4().hex
                 if not db.claim_with_token(path, token, needs_gpu=needs_gpu):
                     continue
+
+                # Check shutdown before submitting
+                if state.shutdown.is_set():
+                    db.release_claim(path, token)
+                    return dispatched
 
                 try:
                     future = state.executor.submit(_encode_file, path, profile, token)
@@ -613,11 +638,15 @@ def _handle_encode_success(db, file_path, temp_output_path,
     target_path = str(Path(file_path).with_suffix(output_ext))
     output_size = Path(temp_output_path).stat().st_size
 
+    # Compute output fingerprint before committing
+    output_hash = compute_file_hash(temp_output_path)
+
     # Fenced commit: transition to COMMITTING before filesystem changes
     if not db.transition_to_committing(file_path, token,
                                         temp_path=temp_output_path,
                                         target_path=target_path,
-                                        expected_size=output_size):
+                                        expected_size=output_size,
+                                        output_hash=output_hash):
         Path(temp_output_path).unlink(missing_ok=True)
         return
 
@@ -633,6 +662,12 @@ def _handle_encode_success(db, file_path, temp_output_path,
         staging = str(Path(target_path).parent / f".{Path(target_path).name}.tmp")
         try:
             shutil.copy2(temp_output_path, staging)
+            # Flush to disk before atomic replace
+            fd = os.open(staging, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
             os.replace(staging, target_path)
         except OSError as copy_exc:
             Path(staging).unlink(missing_ok=True)
@@ -736,16 +771,21 @@ def start_daemon(config: PyflowsConfig, metrics_stop: threading.Event | None = N
     # 4. Wait for workers to finish
     # 5. Join remaining threads and cleanup
 
-    # Step 1: join dispatcher so no new work is submitted
+    # Step 1: join all control-plane threads (dispatcher, scanner, maintenance)
     for t in threads:
         t.join(timeout=10)
+        if t.is_alive():
+            log_event(log, logging.WARNING, "thread_join_timeout",
+                      f"Thread {t.name} did not stop within timeout")
 
     # Step 2: cancel unstarted futures and release their DB claims
-    for future, (path, token) in list(state.pending_futures.items()):
+    with state.futures_lock:
+        snapshot = dict(state.pending_futures)
+        state.pending_futures.clear()
+    for future, (path, token) in snapshot.items():
         if future.cancel():
             with FileDB(config.general.db_path) as db:
                 db.release_claim(path, token)
-    state.pending_futures.clear()
 
     # Step 3: terminate running FFmpeg
     terminate_active_encode()
@@ -828,6 +868,14 @@ def test_encode_file_rejects_missing_token(tmp_config): ...
 def test_encode_file_releases_on_pause(tmp_config): ...
 def test_encode_file_fails_unknown_profile(tmp_config): ...
 def test_encode_file_start_encode_rejects_stale(tmp_config): ...
+
+# Shutdown and recovery tests
+def test_cancelled_future_releases_claim(tmp_config): ...
+def test_reset_committing_extension_change(tmp_path): ...
+def test_reset_committing_target_matches_hash(tmp_path): ...
+def test_cross_device_replacement_failure(tmp_config): ...
+def test_complete_failure_after_rename(tmp_config): ...
+def test_fail_from_committing_clears_metadata(tmp_path): ...
 ```
 
 - [ ] **Step 4: Update existing tests for new architecture**
