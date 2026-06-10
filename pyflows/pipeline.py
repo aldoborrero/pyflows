@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -228,6 +229,9 @@ def encode_file(
     hardware_config: HardwareConfig | None = None,
     stall_timeout: int = 300,
     startup_timeout: int = 600,
+    gpu_semaphore: "threading.BoundedSemaphore | None" = None,
+    registry_key: str = "",
+    replace_original: bool = True,
 ) -> EncodeResult:
     """Run the full encode pipeline for a single file."""
     # Probe + plan
@@ -259,38 +263,55 @@ def encode_file(
         ffmpeg_path=ffmpeg_path,
         hardware_config=hardware_config,
     )
-    result = cmd.run(stall_timeout=stall_timeout, startup_timeout=startup_timeout)
 
-    if result.returncode != 0:
-        fallback_mode = profile.video.fallback.lower()
-        if profile.video.encoder == "vaapi" and fallback_mode == "cpu":
-            log_event(
-                log,
-                logging.WARNING,
-                "vaapi_fallback",
-                "VAAPI encode failed, trying CPU fallback",
-                file_path=input_path,
-            )
-            # Clean failed output
-            Path(output_path).unlink(missing_ok=True)
+    use_vaapi = profile.video.encoder == "vaapi" and plan.video.action != "copy"
+    gpu_acquired = False
+    try:
+        if use_vaapi and gpu_semaphore is not None:
+            gpu_semaphore.acquire()
+            gpu_acquired = True
 
-            # CPU fallback
-            cmd = build_encode_command_from_plan(
-                plan,
-                profile,
-                vaapi_device,
-                use_cpu=True,
-                ffmpeg_path=ffmpeg_path,
-                hardware_config=hardware_config,
-            )
-            result = cmd.run(stall_timeout=stall_timeout, startup_timeout=startup_timeout)
+        result = cmd.run(stall_timeout=stall_timeout, startup_timeout=startup_timeout,
+                         registry_key=registry_key)
 
-            if result.returncode != 0:
+        if result.returncode != 0:
+            if gpu_acquired:
+                gpu_semaphore.release()  # type: ignore[union-attr]
+                gpu_acquired = False
+
+            fallback_mode = profile.video.fallback.lower()
+            if profile.video.encoder == "vaapi" and fallback_mode == "cpu":
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "vaapi_fallback",
+                    "VAAPI encode failed, trying CPU fallback",
+                    file_path=input_path,
+                )
                 Path(output_path).unlink(missing_ok=True)
-                return EncodeResult(EncodeStatus.FAILED, input_path, f"Both VAAPI and CPU encode failed: {result.stderr[-500:]}")
-        else:
-            Path(output_path).unlink(missing_ok=True)
-            return EncodeResult(EncodeStatus.FAILED, input_path, f"Encode failed: {result.stderr[-500:]}")
+
+                cmd = build_encode_command_from_plan(
+                    plan,
+                    profile,
+                    vaapi_device,
+                    use_cpu=True,
+                    ffmpeg_path=ffmpeg_path,
+                    hardware_config=hardware_config,
+                )
+                result = cmd.run(stall_timeout=stall_timeout, startup_timeout=startup_timeout,
+                                 registry_key=registry_key)
+
+                if result.returncode != 0:
+                    Path(output_path).unlink(missing_ok=True)
+                    return EncodeResult(EncodeStatus.FAILED, input_path,
+                                        f"Both VAAPI and CPU encode failed: {result.stderr[-500:]}")
+            else:
+                Path(output_path).unlink(missing_ok=True)
+                return EncodeResult(EncodeStatus.FAILED, input_path,
+                                    f"Encode failed: {result.stderr[-500:]}")
+    finally:
+        if gpu_acquired:
+            gpu_semaphore.release()  # type: ignore[union-attr]
 
     # Verify output
     if not verify_output(output_path):
@@ -298,6 +319,9 @@ def encode_file(
         return EncodeResult(EncodeStatus.FAILED, input_path, "Output validation failed")
 
     final_path = output_path
+
+    if not replace_original:
+        return EncodeResult(EncodeStatus.COMPLETED, output_path)
 
     if profile.output.replace_original:
         target_path = str(Path(input_path).with_suffix(output_ext))
