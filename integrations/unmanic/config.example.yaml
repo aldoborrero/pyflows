@@ -1,0 +1,115 @@
+# Example pyflows config for the Unmanic plugin.
+#
+# The plugin reads this (or whatever PYFLOWS_UNMANIC_CONFIG points at) and uses
+# the `libraries` (path + profile) to pick a profile per file. The library
+# `path`s MUST match what Unmanic sees on disk (e.g. how the media is mounted in
+# the Unmanic container/LXC), which may differ from the pyflows daemon's mounts.
+#
+# `general.temp_dir`/`db_path` are required by the pyflows schema but unused by
+# the plugin (Unmanic owns the cache + queue) — any valid paths satisfy it.
+general:
+  temp_dir: /tmp/pyflows-unmanic
+  db_path: /tmp/pyflows-unmanic.db
+  vaapi_device: /dev/dri/renderD128
+  ffmpeg_path: /usr/lib/jellyfin-ffmpeg/ffmpeg
+  ffprobe_path: /usr/lib/jellyfin-ffmpeg/ffprobe
+
+libraries:
+  - name: Movies
+    path: /media/movies
+    profile: movie
+  - name: TV Shows
+    path: /media/tv-shows
+    profile: tv
+  - name: Anime
+    path: /media/anime
+    profile: anime
+  - name: Documentaries
+    path: /media/documentaries
+    profile: documentary
+
+profiles:
+  tv:
+    video:
+      codec: hevc
+      bit_depth: 10
+      encoder: vaapi
+      quality: 22
+      fallback: cpu
+      skip_codecs: [hevc]
+    audio:
+      keep_languages: [eng, spa, jpn]
+      default_language: eng
+      priority: [eng, spa, jpn]
+      remove_commentary: true
+      add_stereo: {codec: aac, bitrate: 128, channels: 2, languages: [eng, spa, jpn]}
+      preserve_surround: true
+    subtitles:
+      keep_languages: [eng, spa, jpn]
+      remove_formats: [pgs, dvd_subtitle, hdmv_pgs_subtitle]
+      remove_commentary: true
+    output: {container: mkv, replace_original: true}
+
+  anime:
+    video:
+      codec: hevc
+      bit_depth: 10
+      encoder: vaapi
+      quality: 23
+      fallback: cpu
+      skip_codecs: [hevc]
+    audio:
+      keep_languages: [jpn, eng, spa]
+      default_language: jpn
+      priority: [jpn, eng, spa]
+      remove_commentary: true
+      add_stereo: {codec: aac, bitrate: 192, channels: 2, languages: [jpn, eng, spa]}
+      preserve_surround: true
+    subtitles:
+      keep_languages: [eng, spa, jpn]
+      remove_formats: [pgs, dvd_subtitle, hdmv_pgs_subtitle]
+      remove_commentary: true
+    output: {container: mkv, replace_original: true}
+
+  movie:
+    video:
+      codec: hevc
+      bit_depth: 10
+      encoder: vaapi
+      quality: 22
+      fallback: cpu
+      skip_codecs: [hevc]
+    audio:
+      keep_languages: [eng, spa, jpn]
+      default_language: eng
+      priority: [eng, spa, jpn]
+      remove_commentary: true
+      add_stereo: {codec: aac, bitrate: 128, channels: 2, languages: [eng, spa, jpn]}
+      preserve_surround: true
+    subtitles:
+      keep_languages: [eng, spa, jpn]
+      remove_formats: [pgs, dvd_subtitle, hdmv_pgs_subtitle]
+      remove_commentary: true
+    output: {container: mkv, replace_original: true}
+
+  documentary:
+    video:
+      codec: hevc
+      bit_depth: 10
+      encoder: vaapi
+      quality: 22
+      fallback: cpu
+      skip_codecs: [hevc]
+    audio:
+      keep_languages: [eng, spa]
+      default_language: eng
+      priority: [eng, spa]
+      remove_commentary: true
+      add_stereo: {codec: aac, bitrate: 128, channels: 2, languages: [eng, spa]}
+      preserve_surround: true
+    subtitles:
+      keep_languages: [eng, spa]
+      default_language: eng
+      remove_formats: [pgs, dvd_subtitle, hdmv_pgs_subtitle]
+      remove_commentary: true
+    output: {container: mkv, replace_original: true}
