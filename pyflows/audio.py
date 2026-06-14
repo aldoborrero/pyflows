@@ -30,6 +30,12 @@ def build_audio_plan(streams: list[StreamInfo], config: AudioConfig) -> list[Aud
     # 1. Filter to keep_languages (empty = keep all)
     if config.keep_languages:
         kept = [s for s in streams if s.language in config.keep_languages]
+        # Safety: never drop ALL audio. If no stream matches the keep list
+        # (e.g. untagged 'und' audio, or a language not in keep_languages),
+        # fall back to keeping every original track rather than emitting a
+        # video-only file. Dropping all audio is never an acceptable outcome.
+        if not kept and streams:
+            kept = list(streams)
     else:
         kept = list(streams)
 

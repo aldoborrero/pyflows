@@ -1,0 +1,15 @@
+{
+    "author": "aldoborrero",
+    "compatibility": [
+        2
+    ],
+    "description": "Transcode media via pyflows (VAAPI HEVC with CPU fallback, language keep/drop, AAC stereo, commentary removal, reorder, image-subtitle removal). A thin adapter that reuses pyflows' own plan + ffmpeg command builder; the profile is chosen from the configured pyflows library the file lives under.",
+    "id": "pyflows_transcode",
+    "name": "pyflows Transcode",
+    "priorities": {
+        "on_library_management_file_test": 5,
+        "on_worker_process": 5
+    },
+    "tags": "video,ffmpeg,pyflows",
+    "version": "0.2.0"
+}
